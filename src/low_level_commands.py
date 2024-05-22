@@ -18,20 +18,20 @@ velocity_msg_right = Float64MultiArray()
 velocity_msg_left = Float64MultiArray()
 velocity_msg_right.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 velocity_msg_left.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
+k_v = 20
 block = 0.0
 
 
 def callback_vr_inputs_right_arm(vr_inputs):
     global block
-    block = vr_inputs.press_index
+    block = vr_inputs.press_middle
 
 
 def callback_right_arm(joint_vel_ik_right):
 
     for i, name in enumerate(names_right):
         index_in_msg = names_right.index(name)
-        velocity_msg_right.data[index_in_msg] = 10 * joint_vel_ik_right.data[i]
+        velocity_msg_right.data[index_in_msg] = joint_vel_ik_right.data[i] * k_v
 
 
 def main():

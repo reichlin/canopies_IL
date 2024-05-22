@@ -1,0 +1,16 @@
+<launch>
+    <!-- Get the task -->
+    <arg name="task" default="grasp" />
+    <param name="task" value="$(arg task)" />
+
+
+    <!-- Launching the simulator -->
+    <include file="$(find canopies_simulator)/launch/simulator.launch"/>
+
+    <!-- Running low-level commands -->
+    <node pkg="imitation_learning" type="imitation_commands.py" name="imitation_commands_node" output="screen"/>
+
+    <!-- Launching the main loop -->
+    <include file="$(find main_loop)/launch/main_loop_v2.launch"/>
+
+</launch>
