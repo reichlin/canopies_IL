@@ -1,8 +1,10 @@
-input_size: 17
-input_ids: ['object_pos', 'joints_pos','joints_vel'] #['last_ee_pos', 'joints_pos','joints_vel']
+input_size: 14 #17
+#input_ids: ['object_pos', 'joints_pos','joints_vel'] #['last_ee_pos', 'joints_pos','joints_vel']
+input_ids: ['joints_pos','joints_vel']
+n_frames: 4
 output_ids: ['command_vel']
-hidden_size1: 64
-hidden_size2: 64
+hidden_size1: 128
+hidden_size2: 128
 output_size: 7
 lr: 0.001
 epochs: 10000

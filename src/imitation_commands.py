@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import os
+from collections import deque
 
 
 names_right = ["arm_right_1_joint", "arm_right_2_joint", "arm_right_3_joint", "arm_right_4_joint", "arm_right_5_joint", "arm_right_6_joint", "arm_right_7_joint"]
@@ -27,6 +28,7 @@ curr_joints_pos = np.array([])
 curr_joints_vel = np.array([])
 
 goal = [4.765594005584717, -1.0406124591827393, 1.8432689905166626]
+n_frames = 4
 
 def callback_end_effector_state(end_effector_msg):
     pos = end_effector_msg.pose.position
@@ -87,6 +89,8 @@ def main():
 
     agent.load_model(os.path.join(load_dir,f'model_{task}.pth'))
     agent.to(agent.device)
+    curr_joints_pos_stack = deque(curr_joints_pos*n_frames, maxlen=n_frames)
+    curr_joints_vel_stack = deque(curr_joints_vel*n_frames, maxlen=n_frames)
     rospy.sleep(2)
     
 
@@ -96,8 +100,14 @@ def main():
     cnt = 0
     while not rospy.is_shutdown():
         target_pos = np.expand_dims(np.array(goal), 0)
-
-        obs_tsr = torch.from_numpy(np.concatenate((target_pos, curr_joints_pos, curr_joints_vel), -1)).float().to(agent.device)
+        curr_joints_pos_stack.append(curr_joints_pos)
+        curr_joints_vel_stack.append(curr_joints_vel)
+        obs_tsr = torch.from_numpy(
+            np.concatenate((target_pos, 
+                            list(copy.deepcopy(curr_joints_pos_stack)), 
+                            list(copy.deepcopy(curr_joints_vel_stack))
+                            ), -1)
+        ).float().to(agent.device)
         action = agent(obs_tsr).detach().cpu().squeeze().numpy()      
             
         action_msg = Float64MultiArray()

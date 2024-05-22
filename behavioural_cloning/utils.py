@@ -6,6 +6,7 @@ import numpy as np
 import yaml
 from argparse import Namespace
 import os
+from collections import deque
 
 arr2name = {
     'arr_0':'joints_pos',
@@ -27,10 +28,8 @@ name2arr = {
     'vr_act':'arr_6'
 }
 
-import shutil
 
-
-def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_pos'], task=None):
+def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_pos'], n_frames=1, task=None):
     # Check if the path exists
     if not os.path.exists(data_path):
         raise FileNotFoundError(f"Path '{data_path}' does not exist.")
@@ -66,8 +65,19 @@ def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_
                 target_pos = last_ee_pos
                 input_i = np.tile(last_ee_pos, (traj_len, 1))
             else:
-                input_i = (dataset[name2arr[i]])
-            inputs_list.append(input_i)  
+                input_arr = (dataset[name2arr[i]])
+                input_stack = deque([input_arr[0]]*n_frames, maxlen = n_frames)
+                input_i_stack = []
+                for in_i in input_arr:
+                    input_stack.append(in_i)
+                    input_stack_i = np.array(input_stack).flatten()
+                    input_i_stack.append(input_stack_i)
+                input_i = np.array(input_i_stack)
+
+            #append
+            inputs_list.append(input_i) 
+
+
 
         #collect the outputs (labels)
         outputs_list = []
@@ -85,12 +95,11 @@ def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_
 
         all_inputs.append(inputs)
         all_labels.append(labels)
-    
+
     inputs = np.concatenate(all_inputs, axis=0)
     labels = np.concatenate(all_labels, axis=0)
 
     print(f'Loaded {len(all_inputs)} trajectories (out of {len(data_files)}) for a tot of {labels.shape[0]} samples!')
-    print(f'Target posiotion is {target_pos}')
     # Split the data into training and testing sets
     #inputs_train, inputs_test, labels_train, labels_test = train_test_split(
     #    inputs, labels, test_size=0.0, random_state=42
