@@ -1,0 +1,122 @@
+{
+    "os": "Linux-5.15.0-107-generic-x86_64-with-glibc2.17",
+    "python": "3.8.19",
+    "heartbeatAt": "2024-05-22T08:22:06.746007",
+    "startedAt": "2024-05-22T08:22:06.249271",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "main.py",
+    "codePathLocal": "main.py",
+    "codePath": "main.py",
+    "host": "oem-IdeaPad-Gaming-3-16IAH7",
+    "username": "adriano",
+    "executable": "/home/adriano/miniconda3/envs/BehavClone/bin/python",
+    "cpu_count": 10,
+    "cpu_count_logical": 16,
+    "cpu_freq": {
+        "current": 2757.6727499999997,
+        "min": 400.0,
+        "max": 4350.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 3190.096,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 3138.994,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 3285.667,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 3267.383,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 3267.526,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 3239.402,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 3195.119,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 4600.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 3500.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 3500.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 3500.0
+        },
+        {
+            "current": 2700.0,
+            "min": 400.0,
+            "max": 3500.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 180.85349655151367,
+            "used": 147.1804428100586
+        }
+    },
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "memory_total": 6442450944
+        }
+    ],
+    "memory": {
+        "total": 15.344703674316406
+    }
+}

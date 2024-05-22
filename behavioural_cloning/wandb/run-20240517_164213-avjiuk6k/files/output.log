@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "main.py", line 84, in <module>
+    main()
+  File "main.py", line 51, in main
+    X_train, y_train, X_test, y_test = load_data(
+  File "/home/adriano/Desktop/behavioural_cloning/utils.py", line 88, in load_data
+    inputs = np.concatenate(all_inputs, axis=0)
+  File "<__array_function__ internals>", line 180, in concatenate
+ValueError: need at least one array to concatenate

@@ -1,0 +1,10 @@
+
+push_traj_1715946148.npz
+Traceback (most recent call last):
+  File "main.py", line 86, in <module>
+    main()
+  File "main.py", line 53, in main
+    X_train, y_train, X_test, y_test = load_data(
+  File "/home/adriano/Desktop/behavioural_cloning/utils.py", line 53, in load_data
+    shutil.move(os.path.join(source_dir, file_name), target_path)
+NameError: name 'shutil' is not defined

@@ -1,0 +1,73 @@
+wandb_version: 1
+
+input_size:
+  desc: null
+  value: 17
+input_ids:
+  desc: null
+  value:
+  - last_ee_pos
+  - joints_pos
+  - joints_vel
+output_ids:
+  desc: null
+  value:
+  - command_vel
+hidden_size1:
+  desc: null
+  value: 64
+hidden_size2:
+  desc: null
+  value: 64
+output_size:
+  desc: null
+  value: 7
+lr:
+  desc: null
+  value: 0.0001
+epochs:
+  desc: null
+  value: 10000
+batch_size:
+  desc: null
+  value: 32
+load_dir:
+  desc: null
+  value: /home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data
+save_dir:
+  desc: null
+  value: /home/adriano/Desktop/behavioural_cloning/params
+task:
+  desc: null
+  value: grasp
+device:
+  desc: null
+  value: cuda
+_wandb:
+  desc: null
+  value:
+    python_version: 3.8.19
+    cli_version: 0.16.6
+    framework: torch
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    start_time: 1715957059.0
+    t:
+      1:
+      - 1
+      - 5
+      - 53
+      - 55
+      2:
+      - 1
+      - 5
+      - 53
+      - 55
+      3:
+      - 16
+      - 23
+      4: 3.8.19
+      5: 0.16.6
+      8:
+      - 5
+      13: linux-x86_64

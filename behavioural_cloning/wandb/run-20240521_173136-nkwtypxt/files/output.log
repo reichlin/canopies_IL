@@ -1,0 +1,14 @@
+
+Loaded 35 trajectories (out of 35) for a tot of 22715 samples!
+Traceback (most recent call last):
+  File "main.py", line 91, in <module>
+    main()
+  File "main.py", line 53, in main
+    X_train, y_train, X_test, y_test = load_data(
+  File "/home/adriano/Desktop/behavioural_cloning/utils.py", line 92, in load_data
+    inputs_train, inputs_test, labels_train, labels_test = train_test_split(
+  File "/home/adriano/.local/lib/python3.8/site-packages/sklearn/model_selection/_split.py", line 2562, in train_test_split
+    n_train, n_test = _validate_shuffle_split(
+  File "/home/adriano/.local/lib/python3.8/site-packages/sklearn/model_selection/_split.py", line 2181, in _validate_shuffle_split
+    raise ValueError(
+ValueError: test_size=0.0 should be either positive and smaller than the number of samples 22715 or a float in the (0, 1) range

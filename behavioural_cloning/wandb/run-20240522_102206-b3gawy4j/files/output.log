@@ -1,0 +1,22 @@
+Loaded 35 trajectories (out of 35) for a tot of 22715 samples!
+Target posiotion is [ 4.76559401 -1.04061246  1.84326899]
+Agent created an put in cuda
+Model parameters loaded from /home/adriano/Desktop/behavioural_cloning/params/model_grasp.pth
+
+
+
+
+  0%|                                                                                                                                                                  | 4/10000 [00:10<7:33:29,  2.72s/it]Traceback (most recent call last):
+  File "main.py", line 91, in <module>
+    main()
+  File "main.py", line 75, in main
+    train(agent=agent,
+  File "main.py", line 16, in train
+    for batch in train_loader:
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/utils/data/dataloader.py", line 627, in __next__
+    with torch.autograd.profiler.record_function(self._profile_name):
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/autograd/profiler.py", line 605, in __enter__
+    self.record = torch.ops.profiler._record_function_enter_new(
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/_ops.py", line 854, in __call__
+    return self_._op(*args, **(kwargs or {}))
+KeyboardInterrupt

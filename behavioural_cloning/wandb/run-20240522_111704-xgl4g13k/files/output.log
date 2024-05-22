@@ -1,0 +1,27 @@
+Task is grasp2. Continue?
+Loaded 1 trajectories (out of 1) for a tot of 918 samples!
+Target posiotion is [ 4.76559401 -1.04061246  1.84326899]
+Agent created an put in cuda
+NO Model (/home/adriano/Desktop/behavioural_cloning/params/model_grasp2.pth) to load
+  0%|                                                                                                                                                                            | 0/10000 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "main.py", line 93, in <module>
+    main()
+  File "main.py", line 77, in main
+    train(agent=agent,
+  File "main.py", line 17, in train
+    loss = agent.training_step(batch)
+  File "/home/adriano/Desktop/behavioural_cloning/agent.py", line 19, in training_step
+    outputs = self.model(inputs.to(self.device))
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/adriano/Desktop/behavioural_cloning/model.py", line 13, in forward
+    x = torch.relu(self.fc1(x))
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/adriano/.local/lib/python3.8/site-packages/torch/nn/modules/linear.py", line 116, in forward
+    return F.linear(input, self.weight, self.bias)
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (32x6 and 17x64)

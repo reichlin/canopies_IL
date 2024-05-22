@@ -1,0 +1,15 @@
+Loaded 11 trajectories (out of 45) for a tot of 5557 samples!
+Agent created an put in cuda
+No files found with the specified pattern.
+Traceback (most recent call last):
+  File "main.py", line 84, in <module>
+    main()
+  File "main.py", line 65, in main
+    file_load = get_best_model(config.save_dir,config.task)
+  File "/home/adriano/Desktop/behavioural_cloning/utils.py", line 159, in get_best_model
+    return os.path.join(folder_path,highest_file)
+  File "/home/adriano/miniconda3/envs/BehavClone/lib/python3.8/posixpath.py", line 90, in join
+    genericpath._check_arg_types('join', a, *p)
+  File "/home/adriano/miniconda3/envs/BehavClone/lib/python3.8/genericpath.py", line 152, in _check_arg_types
+    raise TypeError(f'{funcname}() argument must be str, bytes, or '
+TypeError: join() argument must be str, bytes, or os.PathLike object, not 'NoneType'

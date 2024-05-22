@@ -1,0 +1,133 @@
+Loaded 1 trajectories (out of 1) for a tot of 918 samples!
+Target posiotion is [ 4.76559401 -1.04061246  1.84326899]
+Agent created an put in cuda
+NO Model (/home/adriano/Desktop/behavioural_cloning/params/model_grasp2.pth) to load
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████▉| 9996/10000 [03:59<00:00, 45.48it/s]Traceback (most recent call last):
+  File "main.py", line 93, in <module>
+    agent.save_model(file_name)
+  File "main.py", line 89, in main
+    score = round(1/avg_loss)
+  File "/home/adriano/miniconda3/envs/BehavClone/lib/python3.8/posixpath.py", line 90, in join
+    genericpath._check_arg_types('join', a, *p)
+  File "/home/adriano/miniconda3/envs/BehavClone/lib/python3.8/genericpath.py", line 152, in _check_arg_types
+    raise TypeError(f'{funcname}() argument must be str, bytes, or '
+TypeError: join() argument must be str, bytes, or os.PathLike object, not 'set'
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 10000/10000 [03:59<00:00, 41.77it/s]

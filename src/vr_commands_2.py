@@ -16,7 +16,9 @@ import numpy as np
 import time
 import datetime
 import copy
+import rospkg
 
+rospack = rospkg.RosPack()
 
         
 grapes_info = np.array([])
@@ -149,13 +151,15 @@ def main():
     ee_pos_msg.orientation = init_or
     publisher_controller_right.publish(ee_pos_msg)
 
-
-    traj_data = TrajectoryHandler()
+    package_path = rospack.get_path('imitation_learning')
+    save_dir = os.path.join(package_path,'data')
+    traj_data = TrajectoryHandler(save_dir)
     rospy.sleep(2)
 
     pos = np.array([0.093, 0.1, -0.0728])
 
     print("ready ...")
+
 
     t = time.time()
     while not rospy.is_shutdown():
@@ -225,11 +229,12 @@ def main():
             control_loop_rate.sleep()
 
 class TrajectoryHandler:
-    def __init__(self):
+    def __init__(self, save_dir:str):
         self.init_data_arrays()
         self.tag = 'grasp2' #push'
         self.cnt=0
-        self.save_dir = "/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data"
+        self.save_dir = save_dir
+        # "/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data"
         os.makedirs(self.save_dir,exist_ok=True)
 
     def init_data_arrays(self):

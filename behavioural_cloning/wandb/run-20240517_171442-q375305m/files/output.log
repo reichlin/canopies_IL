@@ -1,0 +1,11 @@
+Loaded 11 trajectories (out of 45) for a tot of 5557 samples!
+Agent created an put in cuda
+No files found with the specified pattern.
+  0%|▏                                                                                                                                                                   | 9/10000 [00:00<19:06,  8.71it/s]Traceback (most recent call last):
+  File "main.py", line 86, in <module>
+    main()
+  File "main.py", line 70, in main
+    train(agent=agent,
+  File "main.py", line 27, in train
+    os.makedir(path, exist_ok=True)
+AttributeError: module 'os' has no attribute 'makedir'
