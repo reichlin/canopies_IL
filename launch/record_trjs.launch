@@ -1,0 +1,27 @@
+<launch>
+
+    <!-- Launching the simulator -->
+    <include file="$(find canopies_simulator)/launch/simulator.launch"/>
+
+    <!-- Launching the main loop -->
+    <include file="$(find main_loop)/launch/main_loop_v2.launch"/>
+
+    <!-- Launching the low-level controller -->
+    <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
+
+    <!-- Running low-level commands -->
+    <node pkg="imitation_learning" type="low_level_commands.py" name="low_level_commands_node" output="screen"/>
+
+    <!-- Running VR commands -->
+    <node pkg="imitation_learning" type="vr_commands.py" name="vr_commands_node" output="screen"/>
+
+    <!-- Launching the ROS TCP endpoint -->
+    <include file="$(find ros_tcp_endpoint)/launch/endpoint.launch">
+        <arg name="tcp_ip" value="192.168.1.4"/>
+        <arg name="tcp_port" value="10000"/>
+    </include>
+
+    <!-- Running ros2quest -->
+    <node pkg="quest2ros" type="ros2quest.py" name="ros2quest_node" output="screen"/>
+
+</launch>
