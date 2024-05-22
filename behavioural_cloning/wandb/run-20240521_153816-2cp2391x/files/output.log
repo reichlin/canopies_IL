@@ -1,8 +1,0 @@
-
-Loaded 11 trajectories (out of 45) for a tot of 5557 samples!
-Traceback (most recent call last):
-  File "main.py", line 87, in <module>
-    main()
-  File "main.py", line 58, in main
-    input(config.save_dir)
-KeyboardInterrupt
