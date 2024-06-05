@@ -9,10 +9,7 @@
     <!-- Launching the low-level controller -->
     <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
 
-    <!-- Running low-level commands -->
-    <node pkg="imitation_learning" type="low_level_commands.py" name="low_level_commands_node" output="screen"/>
-
-    <!-- Running VR commands -->
+    <!-- Running VR commands and low-level commands-->
     <node pkg="imitation_learning" type="vr_commands.py" name="vr_commands_node" output="screen"/>
 
     <!-- Launching the ROS TCP endpoint -->
