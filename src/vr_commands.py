@@ -20,9 +20,14 @@ import rospkg
 import tf
 from scipy.spatial.transform import Rotation as R
 from canopies_simulator.srv import Simulator
+#import the utils libraries
+import rospkg
+rospack = rospkg.RosPack()
+package_path = rospack.get_path('imitation_learning')
+module_path = os.path.join(package_path,'/src/utils')
+sys.path.append(module_path)
+from utils import TrajectoryHandler
 
-
-        
 
 class VRCommands:
     def __init__(self): 
@@ -35,39 +40,47 @@ class VRCommands:
         self.block = False
         self.term = False
 
-        #low_level_commands vars
-        self.names_right = ["arm_right_1_joint", "arm_right_2_joint", "arm_right_3_joint", "arm_right_4_joint", "arm_right_5_joint", "arm_right_6_joint", "arm_right_7_joint"]
-        self.names_left = ["arm_left_1_joint", "arm_left_2_joint", "arm_left_3_joint", "arm_left_4_joint", "arm_left_5_joint", "arm_left_6_joint", "arm_left_7_joint"]
-        self.k_v = 20
-        self.k_p = 4
+        #remote commands
+        self.block_command=rospy.get_param('/commands/block')
+        self.record_command=rospy.get_param('/commands/record')
+        self.discard_command=rospy.get_param('/commands/discard')
+        self.save_command=rospy.get_param('/commands/save')
 
-        # init states
-        self.init_pos = Point(x=0.093, y=0.1, z=-0.0728)
-        self.init_or = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-        self.init_joint_pos = np.array([-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0])
+        #low_level_commands vars
+        self.names_right = rospy.get_param('/arm_right_joints') 
+        self.names_left = rospy.get_param('/arm_left_joints')
+        self.k_v = rospy.get_param('/gains/k_v')
+        self.k_p = rospy.get_param('/gains/k_p')
 
         #init variables
-        self.curr_pos = np.array([0.093,0.1,-0.0728])
-        self.curr_or = np.array([])
+        ee_init_pos=rospy.get_param('/ee_init_pos')
+        ee_init_or=rospy.get_param('/ee_init_or')
+        arm_right_init_joint=rospy.get_param('/arm_right_init_joint')
+        self.init_joint_pos = np.array(arm_right_init_joint)
+        self.curr_pos = np.array(ee_init_pos)
+        self.curr_quat = np.array(ee_init_or)
         self.curr_joints_pos = np.array([])
         self.curr_joints_vel = np.array([])
-        self.curr_action = np.array([0,0,0])
+        self.curr_action = np.array([0.0]*3)
         self.grapes_pos = np.array([])
-        self.vr_pos = np.array([0.0, 0.0, 0.0])
-        self.vr_rot = np.array([0.0, 0.0, 0.0])
-        self.vr_pos_vel = np.array([0.0, 0.0, 0.0])
-        self.vr_rot_vel = np.array([0.0, 0.0, 0.0])
-        self.d_vr_pos = np.array([0.0, 0.0, 0.0])
+        self.vr_pos = np.array([0.0]*3)
+        self.vr_rot = np.array([0.0]*3)
+        self.vr_pos_vel = np.array([0.0]*3)
+        self.vr_rot_vel = np.array([0.0]*3)
+        self.d_vr_pos = np.array([0.0]*3)
+        self.target_pos = np.array([0.0]*3)
 
+        # init states
+        self.init_pos = Point(x=self.curr_pos[0], y=self.curr_pos[1], z=self.curr_pos[2])
+        self.init_or = Quaternion(x=self.curr_quat[0], y=self.curr_quat[1], z=self.curr_quat[2], w=self.curr_quat[3])
+        
         # ROS stuff
-        rospy.init_node("vr_commands", anonymous=True)
+        rospy.init_node("high_level_controller", anonymous=True)
 
         self.listener = tf.TransformListener()
         rospy.sleep(2)
 
-
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm,queue_size=1) # avg rate > 70 Hz
-        rospy.Subscriber('/q2r_right_hand_twist', Twist, self.callback_vr_velocity_right_arm,queue_size=1)
         rospy.Subscriber('/q2r_right_hand_inputs', OVR2ROSInputs, self.callback_vr_inputs_right_arm,queue_size=1)
         rospy.Subscriber('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, self.callback_joint_state) #abg rate 1Hz
         rospy.Subscriber('/task_2_value', PoseStamped, self.callback_end_effector_state)
@@ -76,16 +89,17 @@ class VRCommands:
         
         self.publisher_controller_right = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
         self.publisher_rigth_arm = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command', Float64MultiArray, queue_size=1)
-        
-        self.control_loop_rate = rospy.Rate(50)  # 10Hz
+        rate=rospy.get_param('rates/recording')
+        self.control_loop_rate = rospy.Rate(rate) 
 
         rospy.sleep(2)
 
         # For saving trajectories
         rospack = rospkg.RosPack()
         package_path = rospack.get_path('imitation_learning')
-        save_dir = os.path.join(package_path,'data')
-        self.traj_data = TrajectoryHandler(save_dir)
+        task = rospy.get_param('task')
+        save_dir = os.path.join(package_path,'data',task)
+        self.traj_data = TrajectoryHandler(save_dir,task)
 
         rospy.loginfo('VRCommands initialized')
 
@@ -99,7 +113,7 @@ class VRCommands:
 
         #get the initial pose
         self.curr_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
-        self.curr_or = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
+        self.curr_quat = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
         self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
         self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
 
@@ -110,31 +124,18 @@ class VRCommands:
         ee_pos_msg.position = self.init_pos 
         ee_pos_msg.orientation = self.init_or
         self.publisher_controller_right.publish(ee_pos_msg)
-        self.target_pos = np.array([0.093, 0.1, -0.0728])
 
         #init vel commands
         velocity_msg_right = Float64MultiArray()
         velocity_msg_left = Float64MultiArray()
-        velocity_msg_right.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        velocity_msg_left.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        velocity_msg_right.data = [0.0]*7
+        velocity_msg_left.data = [0.0]*7
 
         rospy.sleep(2)
 
-        # get init frame TF
-        #pos_base_init, quad_base_init = self.get_transform(target_frame='inner_finger_1_right_link',source_frame=f'base_footprint')        #pos_base_init, quad_base_init = self.get_transform(target_frame='inner_finger_1_right_link',source_frame=f'base_footprint')
-        pos_base_init, quad_base_init = self.get_transform(target_frame='base_footprint',source_frame=f'inner_finger_1_right_link')        #pos_base_init, quad_base_init = self.get_transform(target_frame='inner_finger_1_right_link',source_frame=f'base_footprint')
-        pos_base_init = [0.093, 0.1, -0.0728]
-        self.tf_base_init = construct_transformation_matrix(pos_base_init, [0,0,0,1]) 
-
         rospy.loginfo('Ready...')
         t = time.time()
-        grape_pos = find_closest_position([0,0,0],self.grapes_pos)
-
-        #offset, _ = self.get_transform(target_frame='inner_finger_1_right_link',source_frame=f'arm_right_7_link')        #pos_base_init, quad_base_init = self.get_transform(target_frame='inner_finger_1_right_link',source_frame=f'base_footprint')
-        self.target_pos = np.array([0.0]*3)#np.array([0.093, 0.1, -0.0728]) 
-        ee_pos_init, _ = self.get_transform(target_frame='base_footprint',source_frame=f'arm_right_7_link')       
-
-        #self.resetting = True
+        input('ROS workspace is ready. Press something to start!')
 
         cnt = 0
 
@@ -164,7 +165,7 @@ class VRCommands:
             
             elif self.save:
                 #print('save')
-                self.traj_data.store_external_objs(self.grapes_pos)
+                self.traj_data.data_external_objs = self.grapes_pos
                 trj_n = str(round(datetime.datetime.now().timestamp()))
                 self.traj_data.save_trajectory(trj_n)
                 self.traj_data.reset()
@@ -172,7 +173,7 @@ class VRCommands:
             
             elif self.block:
                 #print('Blocking')
-                velocity_msg_right.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                velocity_msg_right.data = [0.0]*7
                 self.publisher_rigth_arm.publish(velocity_msg_right)
 
             else:
@@ -207,18 +208,11 @@ class VRCommands:
                     self.traj_data.store_pos(rec_pos)
                     self.traj_data.store_orientation(rec_or)
                     self.traj_data.store_velocity(rec_joint_action)
-                    self.traj_data.store_vr_action(np.expand_dims(self.d_vr_pos,0))
+                    self.traj_data.store_action(np.expand_dims(self.d_vr_pos,0))
                 self.control_loop_rate.sleep()
 
     ##  ------- METHODS ---------
 
-    def project_pos(self, pos):
-        pos_homo = np.array([*pos,1])
-        #tf_pos = np.eye(4)
-        #tf_pos[3,:3] = pos
-        #pos_proj = np.dot(tf_pos, self.tf_base_init)
-        #return pos_proj[3,:3]
-        return (self.tf_base_init @ pos_homo)[:3]
 
     def joint_PD(self,target_pos):
         joint_state = rospy.wait_for_message('canopies_simulator/joint_states', JointState, 10)
@@ -261,13 +255,7 @@ class VRCommands:
         pos = end_effector_msg.pose.position
         orient = end_effector_msg.pose.orientation
         self.curr_pos = np.expand_dims(np.array([pos.x,pos.y,pos.z] ), 0)
-        self.curr_or = np.expand_dims(np.array([orient.x,orient.y,orient.z, orient.w]), 0)
-
-    def callback_vr_velocity_right_arm(self,vr_twist):
-        pass 
-        #vr_pos_vel[0], vr_pos_vel[1], vr_pos_vel[2] = vr_twist.linear.x, vr_twist.linear.y, vr_twist.linear.z
-        #vr_rot_vel = vr_twist.angular
-
+        self.curr_quat = np.expand_dims(np.array([orient.x,orient.y,orient.z, orient.w]), 0)
 
     def callback_vr_position_right_arm(self,vr_pose):
         vr_old_pos = copy.deepcopy(self.vr_pos)
@@ -286,132 +274,30 @@ class VRCommands:
             g_pos, _ = self.get_transform(target_frame='base_footprint',source_frame=f'Bunch_{i}')
             poses.append(g_pos)
             dist = np.linalg.norm(np.array(ee_pos)-np.array(g_pos))
-            if dist<0.1:
-                #self.simulator_remove_grape_bunch(int(box.index))
-                print(f'{i} grape removed')
-        self.grapes_pos = poses
+            if dist<0.1: print(f'{i} grape removed')
+        self.grapes_pos = np.expand_dims(np.array(poses),0)
     
     
     def callback_vr_inputs_right_arm(self,vr_inputs):
-        # A - Save traj
-        # B - Discard traj
-        # mid - REC
-        # index - block
-        # A+B - resetting
-        
-        self.discard = vr_inputs.button_upper
-        self.recording = vr_inputs.press_index 
-        self.block = vr_inputs.press_middle
-        self.save = vr_inputs.button_lower
 
-        if self.discard and self.save:
+        curr_commands = {
+            'A': vr_inputs.button_lower,
+            'B': vr_inputs.button_upper,
+            'trigger': vr_inputs.press_index,
+            'middle': vr_inputs.press_middle,
+        }
+
+        self.discard = curr_commands[self.discard_command] 
+        self.recording = curr_commands[self.record_command]  
+        self.block = curr_commands[self.block_command] 
+        self.save = curr_commands[self.save_command] 
+
+        if curr_commands['A']  and curr_commands['B']:
             self.resetting = True
 
     def callback_joint_state(self,joints_msg):
         self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
         self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
-
-
-
-def construct_transformation_matrix(trans, rot):
-    """ Construct the 4x4 transformation matrix from translation and quaternion rotation. """
-    r = R.from_quat(rot)
-    rot_matrix = r.as_matrix()
-    
-    # Insert the translation into the transformation matrix
-    transformation_matrix = np.eye(4)
-    transformation_matrix[:3,:3] = rot_matrix
-    transformation_matrix[:3, 3] = trans
-    
-    return transformation_matrix
-
-def find_closest_position(a, positions):
-    min_distance = float('inf')
-    closest_position = None
-    
-    for pos in positions:
-        pos = np.array(pos)
-        distance = np.linalg.norm(a - pos)
-        if distance < min_distance and pos[0]>0 and pos[1]<0:
-            min_distance = distance
-            closest_position = pos
-            
-    return closest_position
-
-class TrajectoryHandler:
-    def __init__(self, save_dir:str):
-        self.init_data_arrays()
-        self.tag = 'grasp' #push'
-        self.cnt=0
-        self.save_dir = save_dir
-        # "/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data"
-        os.makedirs(self.save_dir,exist_ok=True)
-
-    def init_data_arrays(self):
-        self.data_joints_pos = []
-        self.data_joints_vel = []
-        self.data_pos = []
-        self.data_or = []
-        self.data_joint_act = []
-        self.data_vr_act = []
-
-    def size(self):
-        return len(self.data_joints_pos) 
-
-    def store_joints_pos(self, joints_pos):
-        #self.data_empty = False
-        self.data_joints_pos.append(joints_pos)
-
-    def store_joints_vel(self, joints_vel):
-        self.data_joints_vel.append(joints_vel)
-
-    def store_pos(self, pos):
-        self.data_pos.append(pos)
-
-    def store_orientation(self, orientation):
-        self.data_or.append(orientation)
-
-    def store_velocity(self, vel):
-        self.data_joint_act.append(vel)
-    
-    def store_external_objs(self, objects_pos):
-        #self.data_external_objs = []
-        #for box in objects:
-        #    self.data_external_objs.append(np.array([[[box.xmin, box.xmax], [box.ymin, box.ymax], [box.zmin, box.zmax]]]))
-        self.data_external_objs = np.concatenate(objects_pos, 0)
-    
-    def store_vr_action(self, vel):
-        self.data_vr_act.append(vel)
-
-    def show_current_status(self):
-        print('---')
-        print('data_joints_pos: ', len(self.data_joints_pos))
-        print('data_joints_vel: ', len(self.data_joints_vel))
-        print('data_pos: ', len(self.data_pos))
-        print('data_or: ', len(self.data_or))
-        print('data_joint_act: ', len(self.data_joint_act))
-        print('data_vr_act: ', len(self.data_vr_act))
-
-    def save_trajectory(self, name):
-        if self.size()>100:
-            path = os.path.join(self.save_dir,self.tag)
-            os.makedirs(path, exist_ok=True)
-            file = os.path.join(path,f"traj_{name}.npz")
-            np.savez(file,
-                np.concatenate(self.data_joints_pos, 0),
-                np.concatenate(self.data_joints_vel, 0),
-                np.concatenate(self.data_pos, 0),
-                np.concatenate(self.data_or, 0),
-                np.concatenate(self.data_joint_act, 0),
-                self.data_external_objs,
-                np.concatenate(self.data_vr_act,0), 
-            )
-            self.cnt+=1
-            print(f'Trajectory ({self.cnt}) of {len(self.data_joints_pos)} steps saved in {file}')
-            self.show_current_status()
-        
-    def reset(self):
-        self.init_data_arrays()
 
 if __name__ == "__main__":
     try:

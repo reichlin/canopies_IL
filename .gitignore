@@ -2,3 +2,4 @@ data/*
 package.xml
 CMakeLists.txt
 behavioural_cloning/wandb
+behavioural_cloning/params

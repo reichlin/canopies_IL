@@ -2,10 +2,13 @@
     <!-- Get the task -->
     <arg name="task" default="grasp" />
     <arg name="rec" default='true'/>
+    <arg name="agent" default='stable_agent'/>
 
     <param name="task" value="$(arg task)" />
     <param name="rec" value="$(arg rec)" />
+    <param name="agent_name" value='$(arg agent)'/>
 
+    <rosparam file="$(find imitation_learning)/config/simulation_config.yaml" command="load"/>
 
     <!-- Launching the simulator -->
     <include file="$(find canopies_simulator)/launch/simulator.launch"/>

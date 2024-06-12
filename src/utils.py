@@ -16,10 +16,12 @@ name2arr = {
 }
 Data = namedtuple('Dataset', ['states', 'actions', 'next_states'])
 
+
+
 class TrajectoryHandler:
-    def __init__(self, save_dir:str):
+    def __init__(self, save_dir:str, tag:str):
         self.init_data_arrays()
-        self.tag = 'grasp'
+        self.tag = tag
         self.cnt=0
         self.save_dir = save_dir
         os.makedirs(self.save_dir,exist_ok=True)
@@ -31,7 +33,8 @@ class TrajectoryHandler:
         self.data_or = []
         self.data_joint_act = []
         self.data_vr_act = []
-
+        self.data_external_objs = []
+    
     def size(self):
         return len(self.data_joints_pos) 
 
@@ -65,21 +68,19 @@ class TrajectoryHandler:
 
     def save_trajectory(self, name):
         if self.size()>10:
-            path = os.path.join(self.save_dir,f'{self.tag}_results')
-            os.makedirs(path, exist_ok=True)
-            file = os.path.join(path,f"traj_{name}.npz")
+            file = os.path.join(self.save_dir,f"traj_{name}.npz")
             np.savez(file,
                 np.concatenate(self.data_joints_pos, 0),
                 np.concatenate(self.data_joints_vel, 0),
                 np.concatenate(self.data_pos, 0),
                 np.concatenate(self.data_or, 0),
                 np.concatenate(self.data_joint_act, 0),
+                self.data_external_objs,
                 np.concatenate(self.data_vr_act,0), 
             )
             self.cnt+=1
             print(f'Trajectory ({self.cnt}) of {len(self.data_joints_pos)} steps saved in {file}')
             self.show_current_status()
-            self.init_data_arrays()
         
     def reset(self):
         self.init_data_arrays()
@@ -92,7 +93,6 @@ def process_obs(obs_dict):
         return obs_tsr
 
 def get_closest_obj(obj_poses, ee_pos):
-    #object_poses = np.array([[(g[0,0]+g[0,1])/2, (g[1,0]+g[1,1])/2, (g[2,0]+g[2,1])/2] for g in obj_poses])
     closest_object_pos = obj_poses[np.argmin(np.linalg.norm(obj_poses - ee_pos, axis=1))]
     return closest_object_pos
     
@@ -126,7 +126,6 @@ def load_trajectories(data_path, n_frames=1, n_freq=1):
         joint_poses = list(dataset[name2arr['joints_pos']])
         joint_vels = list(dataset[name2arr['joints_vel']])
         actions = list(dataset[name2arr['ee_pos']])
-        
         #bring everything from 50Hz to 1Hz (padding if necessary)
         n = len(joint_poses)
         n_pad = int((n_freq - n % n_freq) % n_freq)
@@ -163,3 +162,16 @@ def load_trajectories(data_path, n_frames=1, n_freq=1):
             state_0 = state_1
     return Data(states, acts, next_states)
 
+def yaml_to_namespace(yaml_file):
+    with open(yaml_file, 'r') as file:
+        config = yaml.safe_load(file)
+        return convert_to_namespace(config)
+
+        
+def convert_to_namespace(d):
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: convert_to_namespace(v) for k, v in d.items()})
+    elif isinstance(d, list):
+        return [convert_to_namespace(i) for i in d]
+    else:
+        return d

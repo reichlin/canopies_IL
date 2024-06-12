@@ -1,5 +1,7 @@
 <launch>
 
+    <rosparam file="$(find imitation_learning)/config/simulation_config.yaml" command="load"/>
+
     <!-- Launching the simulator -->
     <include file="$(find canopies_simulator)/launch/simulator.launch"/>
 

@@ -20,48 +20,35 @@ class MLP(nn.Module):
 
 
 class Agent(nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2, output_size, device='cpu'):
+    def __init__(self, input_size, hidden_size1, hidden_size2, output_size, encoder_hidden_size=64, stable=True, device='cpu'):
         super(Agent, self).__init__()
-        self.model = MLP(input_size, hidden_size1, hidden_size2, output_size)
+        self.stable = stable
+        if self.stable:
+            self.encoder = EquivariantEncoder(input_size, output_size, encoder_hidden_size, device=device).to(device)
+            self.policy = MLP(output_size, hidden_size1, hidden_size2, output_size).to(device)
+        else:
+            self.policy = MLP(input_size, hidden_size1, hidden_size2, output_size)
         self.criterion = nn.MSELoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=0.001)
         self.device = device
-    
+
     def select_action(self,x):
-        return self.model(x)
+        if self.stable:
+            z = self.encoder(x)
+            rho, grad = self.density_estimator.get_gradient(z)
+            a_IL = self.policy(z)
+            p = torch.tanh(rho*0.002) #*0.001)
+            #print('p: ',p.item())#, 'grad: ',grad, 'a_IL: ',a_IL )
+            return p*a_IL + (1-p)*grad
+        else:
+            return self.policy(x)
+
+        #IL_traj: 0.001
+        #IL_traj_1: 0.005
+        #IL_traj_2: 0.002
 
     def to_device(self):
         self.to(self.device)
-
-    def load_model(self, path):
-        self.model.load_state_dict(torch.load(path))
-        print(f"Model parameters loaded from {path}")
-
-
-
-class AgentStable(nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2, encoder_hidden_size, output_size, device='cpu'):
-        super(AgentStable, self).__init__()
-        self.encoder = EquivariantEncoder(input_size, output_size, encoder_hidden_size, device=device).to(device)
-        self.policy = MLP(output_size, hidden_size1, hidden_size2, output_size).to(device)
-        
-        self.criterion = nn.MSELoss()
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=0.001)
-        self.step = 0
-        self.device = device
-
-    def forward(self,x):
-        z = self.encoder(x)
-        return self.policy(z)
-
-    def select_action(self, x):
-        z = self.encoder(x)
-        rho, grad = self.density_estimator.get_gradient(z)
-        a_IL = self.policy(z)
-        p = torch.tanh(rho)
-        a = p*a_IL + (1-p)*grad
-        self.step +=1
-        return a
 
     def load_model(self, path):
         self.policy.load_state_dict(torch.load(path))
@@ -80,6 +67,11 @@ class AgentStable(nn.Module):
         z_states = self.encoder(obs_tsr).detach()
         self.density_estimator = KDE(z_states)
         print(f'KDE configured with {obs_tsr.shape[0]} states')
+        return z_states
+
+
+
+
 
 
 class KDE():
@@ -89,8 +81,8 @@ class KDE():
         self.states = states
         self.N = self.states.shape[0]
         self.d = self.states.shape[1]
-        self.h = 50.
-        self.ni = 0.05
+        self.h = 0.1
+        self.ni = 0.0005
 
 
     def K(self, x, x_data):
@@ -98,6 +90,12 @@ class KDE():
         diff = torch.cdist(x, x_data, p=2)
         delta = - 0.5 * (diff / self.h) ** 2
         return torch.exp(delta)
+
+    
+    def compute_p(self,z):
+        p = (2*np.pi*(self.h**self.d))**(-0.5) * self.K(z, self.states)
+        return torch.tanh(torch.sum(p, -1)*0.0005)
+
 
     def get_gradient(self, z):
         z.requires_grad_(True)
@@ -109,10 +107,12 @@ class KDE():
 
         #gradient
         grad = torch.autograd.grad(outputs=rho, inputs=z)[0]
+        #grad = torch.clamp(grad, min=-0.1, max=0.1)
+
         if torch.any(torch.isnan(grad)):
             grad = torch.nan_to_num(grad, nan=0.)
 
-        return rho, grad*self.ni
+        return rho, grad/torch.linalg.norm(grad)*self.ni
 
 
 
