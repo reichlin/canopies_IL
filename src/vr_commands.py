@@ -117,7 +117,6 @@ class VRCommands:
         self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
         self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
 
-        rospy.loginfo("starting ...")
 
         # Initialize arm in a standard position
         ee_pos_msg = ExternalReference()
@@ -133,9 +132,8 @@ class VRCommands:
 
         rospy.sleep(2)
 
-        rospy.loginfo('Ready...')
         t = time.time()
-        input('ROS workspace is ready. Press something to start!')
+        input('ROS workspace is ready. Press Inv to start!')
 
         cnt = 0
 
@@ -159,7 +157,7 @@ class VRCommands:
 
             if self.discard:
                 if self.traj_data.size()>10:
-                    print('Trajectory discarded')
+                    print('\nTrajectory discarded')
                 self.traj_data.reset()
 
             
@@ -209,6 +207,7 @@ class VRCommands:
                     self.traj_data.store_orientation(rec_or)
                     self.traj_data.store_velocity(rec_joint_action)
                     self.traj_data.store_action(np.expand_dims(self.d_vr_pos,0))
+                    print(f"\rRecording in progres: step {self.traj_data.size()}", end="")
                 self.control_loop_rate.sleep()
 
     ##  ------- METHODS ---------
@@ -274,7 +273,9 @@ class VRCommands:
             g_pos, _ = self.get_transform(target_frame='base_footprint',source_frame=f'Bunch_{i}')
             poses.append(g_pos)
             dist = np.linalg.norm(np.array(ee_pos)-np.array(g_pos))
-            if dist<0.1: print(f'{i} grape removed')
+            if dist<0.1: 
+                self.simulator_remove_grape_bunch(int(i))
+                print(f'\n{i} grape removed')
         self.grapes_pos = np.expand_dims(np.array(poses),0)
     
     

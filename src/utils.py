@@ -58,17 +58,19 @@ class TrajectoryHandler:
         self.data_vr_act.append(vel)
 
     def show_current_status(self):
-        print('---')
-        print('data_joints_pos: ', len(self.data_joints_pos))
-        print('data_joints_vel: ', len(self.data_joints_vel))
-        print('data_pos: ', len(self.data_pos))
-        print('data_or: ', len(self.data_or))
-        print('data_joint_act: ', len(self.data_joint_act))
-        print('data_vr_act: ', len(self.data_vr_act))
+        print('------------- SUMMARY -------------')
+        print('joint positions: ', len(self.data_joints_pos))
+        print('joint velocities: ', len(self.data_joints_vel))
+        print('ee positions: ', len(self.data_pos))
+        print('ee orientations: ', len(self.data_or))
+        print('joint vel actions: ', len(self.data_joint_act))
+        print('vr commands: ', len(self.data_vr_act))
+        print('------------------------------------')
 
     def save_trajectory(self, name):
         if self.size()>10:
-            file = os.path.join(self.save_dir,f"traj_{name}.npz")
+            name = f"traj_{name}.npz"
+            file = os.path.join(self.save_dir,name)
             np.savez(file,
                 np.concatenate(self.data_joints_pos, 0),
                 np.concatenate(self.data_joints_vel, 0),
@@ -79,7 +81,7 @@ class TrajectoryHandler:
                 np.concatenate(self.data_vr_act,0), 
             )
             self.cnt+=1
-            print(f'Trajectory ({self.cnt}) of {len(self.data_joints_pos)} steps saved in {file}')
+            print(f'\nTrajectory ({self.cnt}) of {len(self.data_joints_pos)} steps saved as {name}')
             self.show_current_status()
         
     def reset(self):

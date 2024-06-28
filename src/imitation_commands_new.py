@@ -34,15 +34,26 @@ from utils_rl import Agent
 
 random_init = False
 
+# 232 228 97 160
+
+
 class ImitationNode:
     def __init__(self,rec=False):
         rospy.init_node("high_level_controller", anonymous=True)
+        self.block = False
+        self.activate_pd = True
+
+        #init global vars
+        self.bunch_poses = {0:np.array([0.5, -0.2, 0.5])}
+        self.target_ids = [97, 160]
+        self.init_pos = np.array([0.4081436362262652, -0.43626031658396147, 0.537828329572042])
         
         #get rosparams
         self.names_right = rospy.get_param('/arm_right_joints') 
         self.load_dir = os.path.join(package_path,rospy.get_param('/folders/load'))
         self.data_dir = os.path.join(package_path,rospy.get_param('/folders/data'))
         self.recording = rospy.get_param('rec')
+        self.recording = False   #TODO:   cancelllllllllllllllllllllllllllllllllllllllllllllllllll
         self.n_frames = rospy.get_param('/agent_hp/n_frames')
 
         task = rospy.get_param('task')
@@ -66,7 +77,6 @@ class ImitationNode:
         self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
         self.velocity_msg_right = Float64MultiArray()
         self.velocity_msg_right.data = [0.0]*7
-        self.goal = np.expand_dims(np.array([ 4.08305303e-01, -1.07297375e-05,  1.27501961e+00]),0)   #####TODO
         self.pos = np.zeros(3) 
         self.k_v = rospy.get_param('/gains/k_v')
 
@@ -99,16 +109,28 @@ class ImitationNode:
 
 
     def main(self):
+
+        print(f"Starting with target grape bunches {self.target_ids}")
+
+        self.goal_id = self.target_ids.pop(0)
+        self.goal = self.bunch_poses[self.goal_id]
         
+        self.pd_traj = self.generate_parabolic_trajectory(self.goal)
+        self.goal_pd = self.pd_traj[0]
+
+        '''print(list(self.bunch_poses.keys()))
+        for g in self.bunch_poses.keys():
+            input(g)
+            self.simulator_remove_grape_bunch(g)'''
+
         # init the observation stack
         obs_dict = {
-            'goal': self.goal,
+            'goal': np.expand_dims(self.goal,0),
             'joint_pos': deque(list(self.curr_joints_pos)*self.n_frames,maxlen=self.n_frames),
             'joint_vel': deque(list(self.curr_joints_vel)*self.n_frames,maxlen=self.n_frames),
         }
         rospy.sleep(2)    
                 
-        print(f"Starting with target grape bunch 160")
         sim_step=0
         if random_init:
             self.pos = self.pos + np.concatenate([np.random.uniform(low=-0.3, high=0.3, size=1), 
@@ -116,13 +138,27 @@ class ImitationNode:
                             np.random.uniform(low=0, high=0.3, size=1)])
 
         while not rospy.is_shutdown():
-            # process the observations and collect the acytion from the agent
-            obs_dict['joint_pos'].append(self.curr_joints_pos[0])
-            obs_dict['joint_vel'].append(self.curr_joints_vel[0])
-            obs_tsr = process_obs(obs_dict).to(self.agent.device)
-            action = self.agent.select_action(obs_tsr).detach().cpu().squeeze().numpy()     
             rec_pos_,rec_or_ = self.get_transform(target_frame='base_footprint',source_frame=f'inner_finger_1_right_link')
-            action = np.array([0,0,0])
+
+            if self.block:
+                #print('Blocking')
+                self.velocity_msg_right.data = [0.0]*7
+                self.publisher_joint_commands.publish(self.velocity_msg_right)
+                self.control_loop_rate.sleep()
+                continue
+
+            elif self.activate_pd:
+                self.check_traj_tracking(rec_pos_)
+                action = self.cartesian_PD(self.goal_pd, np.array(rec_pos_))    
+
+            else:
+                obs_dict['joint_pos'].append(self.curr_joints_pos[0])
+                obs_dict['joint_vel'].append(self.curr_joints_vel[0])
+                obs_dict['goal'] = np.expand_dims(self.goal,0)
+
+                obs_tsr = process_obs(obs_dict).to(self.agent.device)
+                action = self.agent.select_action(obs_tsr).detach().cpu().squeeze().numpy() 
+            
             # publish a new commanded pos
             if not(random_init and sim_step<10):
                 self.pos += action
@@ -130,8 +166,7 @@ class ImitationNode:
             t = time.time()
             ee_pos_msg = ExternalReference()
             ee_pos_msg.position = Point(x=self.pos[0], y=self.pos[1], z=self.pos[2])
-            ee_pos_msg.orientation = Quaternion(x=0.0, y=0.2588, z=0.0, w=0.9659)
-            print('porcoddio')
+            ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
             self.publisher_ee_commands.publish(ee_pos_msg)
 
             if self.recording:
@@ -164,6 +199,12 @@ class ImitationNode:
 
             self.control_loop_rate.sleep()
 
+    def cartesian_PD(self, g, p):
+        gay = np.array([0.1]*3)
+        dp = g-p
+        a = np.clip(dp*gay,-0.1,0.1)
+        return a
+
 
     def callback_joint_state(self,joints_msg):
         self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
@@ -185,7 +226,12 @@ class ImitationNode:
             dist = np.linalg.norm(np.array(ee_pos)-np.array(g_pos))
             if dist<0.2:
                 self.simulator_remove_grape_bunch(int(box.index))
-                if self.recording: self.traj_data.save_trajectory(self.saving_name)
+                self.update_goal(i)
+                #if self.recording: self.traj_data.save_trajectory(self.saving_name)
+
+            #update bounches to be seen
+            self.bunch_poses[i] = np.array(g_pos)
+
 
     def get_transform(self, target_frame, source_frame):
         try:
@@ -196,6 +242,78 @@ class ImitationNode:
             rospy.logerr(f"Failed to get transform from {source_frame} to {target_frame}: {e}")
             return None, None
 
+    def update_goal(self, idx):
+        goal_reached = idx == self.goal_id
+        if goal_reached:
+            if self.target_ids == []:
+                print(f'Last goal reached!')
+                self.block = True
+            else:
+                self.goal_id = self.target_ids.pop(0)
+                self.goal = self.bunch_poses[self.goal_id]
+                print(f'goal updated to  {self.goal_id}')
+                self.pd_traj = self.generate_parabolic_trajectory(self.goal)
+                self.goal_pd = self.pd_traj[0]
+                self.activate_pd = True
+                self.block = True
+                time.sleep(1)
+                self.block=False
+
+
+    def check_traj_tracking(self, pos):
+        e = np.linalg.norm(pos-self.goal_pd)
+        if e<0.1:
+            self.goal_pd = self.pd_traj.pop()
+        else:
+            self.goal_pd = self.pd_traj[0]
+    
+    '''
+    def generate_parabolic_trajectory(self, end, num_points=10):
+
+        start,_ = self.get_transform(target_frame='base_footprint',source_frame=f'inner_finger_1_right_link')
+
+        # Unpack the start, end, and peak points
+        x1, y1, z1 = start
+        x2, y2, z2 = end
+        xp, yp, zp = self.init_pos
+        
+        # Generate linearly spaced t values
+        t = np.linspace(0, 1, num_points)
+        
+        # Parametric equation for x and y (quadratic interpolation)
+        x = (1 - t) ** 2 * x1 + 2 * (1 - t) * t * xp + t ** 2 * x2
+        y = (1 - t) ** 2 * y1 + 2 * (1 - t) * t * yp + t ** 2 * y2
+        
+        # Parametric equation for z (quadratic interpolation)
+        z = (1 - t) ** 2 * z1 + 2 * (1 - t) * t * zp + t ** 2 * z2
+        
+        # Combine into a single array of points
+        trajectory = np.vstack((x, y, z)).T
+        return list(trajectory)
+
+    '''
+    def generate_parabolic_trajectory(self, end, num_points=100):
+
+        start,_ = self.get_transform(target_frame='base_footprint',source_frame=f'inner_finger_1_right_link')
+        # Unpack the start and end points
+        x1, y1, z1 = start
+        x2, y2, z2 = end
+        
+        # Generate linearly spaced x and y points
+        t = np.linspace(0, 1, num_points)
+        
+        # Parametric equation for x and y (linear interpolation)
+        x = (1 - t) * x1 + t * x2
+        y = (1 - t) * y1 + t * y2
+        
+        # Parabolic interpolation for z
+        z = (1 - t) * z1 + t * z2 - 4 * t * (1 - t)  # Parabolic shape factor
+        
+        # Combine into a single array of points
+        trajectory = np.vstack((x, y, z)).T
+        return list(trajectory)
+
+    
 
 
 if __name__ == "__main__":
