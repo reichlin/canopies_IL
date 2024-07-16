@@ -1,5 +1,8 @@
 <launch>
 
+    <arg name="task" default="grasp" />
+    <param name="task" value="$(arg task)" />
+
     <rosparam file="$(find imitation_learning)/config/simulation_config.yaml" command="load"/>
 
     <!-- Launching the simulator -->
@@ -12,11 +15,11 @@
     <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
 
     <!-- Running VR commands and low-level commands-->
-    <node pkg="imitation_learning" type="vr_commands.py" name="vr_commands_node" output="screen"/>
+    <node pkg="imitation_learning" type="vr_commands_new.py" name="vr_commands_node" output="screen"/>
 
     <!-- Launching the ROS TCP endpoint -->
     <include file="$(find ros_tcp_endpoint)/launch/endpoint.launch">
-        <arg name="tcp_ip" value="192.168.1.206"/>
+        <arg name="tcp_ip" value="192.168.1.4"/>
         <arg name="tcp_port" value="10000"/>
     </include>
 

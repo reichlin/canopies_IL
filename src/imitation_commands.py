@@ -31,11 +31,14 @@ module_path = os.path.join(package_path,'/src/utils')
 sys.path.append(module_path)
 from utils import TrajectoryHandler, load_trajectories, process_obs
 from utils_rl import Agent
+import datetime
 
 random_init = False
 
 class ImitationNode:
-    def __init__(self,rec=False):
+
+    def __init__(self, rec=False):
+
         rospy.init_node("high_level_controller", anonymous=True)
         
         #get rosparams
@@ -72,23 +75,30 @@ class ImitationNode:
 
 
         #initialize the agent
-        input_dim = rospy.get_param('/agent_hp/input_dim') 
-        output_dim = rospy.get_param('/agent_hp/output_dim')
-        hidden_dim = rospy.get_param('/agent_hp/hidden_dim') 
-        self.agent = Agent(input_size=input_dim, hidden_size1=hidden_dim, hidden_size2=hidden_dim, output_size=output_dim, 
-                            stable=self.stable_agent, device='cuda' if torch.cuda.is_available() else 'cpu')
-        model2load = f'model_{task}_stable.pth' if self.stable_agent else f'model_{task}.pth'
-        self.agent.load_model(os.path.join(self.load_dir,model2load))
+        self.agent = Agent(input_size=56, hidden_size1=128, hidden_size2=128, output_size=3, stable=True, device='cuda' if torch.cuda.is_available() else 'cpu')
+        encoder_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/model_encode.pth'
+        policy_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/policy_grasp_stable.pth'
+        mdn_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/mdn_grasp_stable.pth'
+        self.agent.load_model(policy_file, mdn_file)
+
+        # input_dim = rospy.get_param('/agent_hp/input_dim')
+        # output_dim = rospy.get_param('/agent_hp/output_dim')
+        # hidden_dim = rospy.get_param('/agent_hp/hidden_dim')
+        # self.agent = Agent(input_size=input_dim, hidden_size1=hidden_dim, hidden_size2=hidden_dim, output_size=output_dim,
+        #                     stable=self.stable_agent, device='cuda' if torch.cuda.is_available() else 'cpu')
+        # model2load = f'model_{task}_stable.pth' if self.stable_agent else f'model_{task}.pth'
+        # self.agent.load_model(os.path.join(self.load_dir,model2load))
         if self.stable_agent:
             #need to load the params for the encoder and to init the KDE
-            self.agent.encoder.load_model(os.path.join(self.load_dir,f'model_encode.pth'))
+            # self.agent.encoder.load_model(os.path.join(self.load_dir,f'model_encode.pth'))
+            self.agent.encoder.load_model(encoder_file)
             n_freq = int(rospy.get_param('rates/recording')/rate)
             dataset = load_trajectories(
                             data_path=os.path.join(self.data_dir, task),
                             n_frames=self.n_frames,
                             n_freq = n_freq
                         )
-            z = self.agent.init_KDE(dataset.states)
+            # z = self.agent.init_KDE(dataset.states)
         self.agent.to_device()
         
         #setup the recorder
@@ -99,6 +109,14 @@ class ImitationNode:
 
 
     def main(self):
+
+        input("start?")
+
+        g_mean = np.array([[0.5, -0.3, 1.3]])
+
+        closest_grape_idx = np.argmin(np.linalg.norm(self.grapes-g_mean, axis=-1))
+        self.goal = self.grapes[closest_grape_idx:closest_grape_idx+1]
+        goal_id = self.grapes_idx[closest_grape_idx]
         
         # init the observation stack
         obs_dict = {
@@ -108,7 +126,7 @@ class ImitationNode:
         }
         rospy.sleep(2)    
                 
-        print(f"Starting ... aiming to {self.goal}")
+        print(f"Starting ... aiming to {self.goal} of id {goal_id}")
         sim_step=0
         if random_init:
             self.pos = self.pos + np.concatenate([np.random.uniform(low=-0.3, high=0.3, size=1), 
@@ -122,6 +140,8 @@ class ImitationNode:
             obs_tsr = process_obs(obs_dict).to(self.agent.device)
             action = self.agent.select_action(obs_tsr).detach().cpu().squeeze().numpy()     
             rec_pos_,rec_or_ = self.get_transform(target_frame='base_footprint',source_frame=f'inner_finger_1_right_link')
+
+            print(rec_pos_, " ", action)
             
             # publish a new commanded pos
             if not(random_init and sim_step<10):
@@ -152,13 +172,13 @@ class ImitationNode:
 
             #rec variables
             if self.recording>0.0:
-                    rec_joint_action = copy.deepcopy(np.expand_dims(np.array(self.velocity_msg_right.data), 0))
-                    self.traj_data.store_joints_pos(rec_joints_pos)
-                    self.traj_data.store_joints_vel(rec_joints_vel)
-                    self.traj_data.store_pos(rec_pos)
-                    self.traj_data.store_orientation(rec_or)
-                    self.traj_data.store_velocity(rec_joint_action)
-                    self.traj_data.store_action(np.expand_dims(action,0))
+                rec_joint_action = copy.deepcopy(np.expand_dims(np.array(self.velocity_msg_right.data), 0))
+                self.traj_data.store_joints_pos(rec_joints_pos)
+                self.traj_data.store_joints_vel(rec_joints_vel)
+                self.traj_data.store_pos(rec_pos)
+                self.traj_data.store_orientation(rec_or)
+                self.traj_data.store_velocity(rec_joint_action)
+                self.traj_data.store_action(np.expand_dims(action,0))
             sim_step+=1
 
             self.control_loop_rate.sleep()
@@ -172,19 +192,29 @@ class ImitationNode:
         rospy.wait_for_service('/simulator')
         cmd = rospy.ServiceProxy('/simulator', Simulator)
         cmd("RemoveGrapeBunch", id_, False, "")
-        print(f'Grape {i} removed')
+        print(f'Grape bunch {id_} removed')
 
     def callback_grapes(self, grapes_data):
+
+        self.grapes = []
+        self.grapes_idx = []
         ee_pos_1,_ = self.get_transform(target_frame='base_footprint',source_frame=f'fingertip_1_right_link')
         ee_pos_2,_ = self.get_transform(target_frame='base_footprint',source_frame=f'fingertip_2_right_link')
         ee_pos = (np.array(ee_pos_1) + np.array(ee_pos_2))/2 
         for box in grapes_data.boxes:
             i = box.index
             g_pos, _ = self.get_transform(target_frame='base_footprint',source_frame=f'Bunch_{i}')
+            self.grapes.append(g_pos)
+            self.grapes_idx.append(box.index)
             dist = np.linalg.norm(np.array(ee_pos)-np.array(g_pos))
-            if dist<0.2:
+            if dist<0.1: #0.2:
                 self.simulator_remove_grape_bunch(int(box.index))
-                if self.recording: self.traj_data.save_trajectory(self.saving_name)
+            #     self.update_goal(i)
+                if self.recording: self.traj_data.save_trajectory(self.saving_name+str(round(datetime.datetime.now().timestamp())))
+            #
+            # #update bounches to be seen
+            # self.bunch_poses[i] = np.array(g_pos)
+        self.grapes = np.array(self.grapes)
 
     def get_transform(self, target_frame, source_frame):
         try:

@@ -1,7 +1,7 @@
 arm_right_joints: ["arm_right_1_joint", "arm_right_2_joint", "arm_right_3_joint", "arm_right_4_joint", "arm_right_5_joint", "arm_right_6_joint", "arm_right_7_joint"]
 arm_left_joints: ["arm_left_1_joint", "arm_left_2_joint", "arm_left_3_joint", "arm_left_4_joint", "arm_left_5_joint", "arm_left_6_joint", "arm_left_7_joint"]
-ee_init_pos: [0,0,0]
-ee_init_or: [0,0.0, 0.0, 0.0, 1.0]
+ee_init_pos: [0.0, 0.0, 0.0]
+ee_init_or: [0.0, 0.0, 0.0, 1.0]
 arm_right_init_joint: [-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0]
 
 gains:
@@ -12,6 +12,8 @@ rates:
   recording: 50
   testing: 1
 
+threshold: 0.1
+
 commands:
   save: "A"
   discard: "B"
@@ -20,10 +22,10 @@ commands:
 
 folders:
   data: "data"
-  load: "agent_params"
+  load: "behavioural_cloning/params"
 
 agent_hp:
   n_frames: 4
-  input_dim: 59
+  input_dim: 56 #59
   hidden_dim: 128
   output_dim: 3

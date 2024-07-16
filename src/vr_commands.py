@@ -69,6 +69,7 @@ class VRCommands:
         self.vr_rot_vel = np.array([0.0]*3)
         self.d_vr_pos = np.array([0.0]*3)
         self.target_pos = np.array([0.0]*3)
+        self.target_rot = np.array([0.0]*4)
 
         # init states
         self.init_pos = Point(x=self.curr_pos[0], y=self.curr_pos[1], z=self.curr_pos[2])
@@ -81,6 +82,7 @@ class VRCommands:
         rospy.sleep(2)
 
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm,queue_size=1) # avg rate > 70 Hz
+        #rospy.Subscriber('/q2r_right_hand_twist', Twist, self.callback_vr_orientation_right_arm, queue_size=1)
         rospy.Subscriber('/q2r_right_hand_inputs', OVR2ROSInputs, self.callback_vr_inputs_right_arm,queue_size=1)
         rospy.Subscriber('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, self.callback_joint_state) #abg rate 1Hz
         rospy.Subscriber('/task_2_value', PoseStamped, self.callback_end_effector_state)
@@ -183,6 +185,7 @@ class VRCommands:
                 t = time.time()
                 ee_pos_msg.position = Point(x=self.target_pos[0], y=self.target_pos[1], z=self.target_pos[2])
                 ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+                #ee_pos_msg.orientation = Quaternion(x=self.target_rot[0], y=self.target_rot[1], z=self.target_rot[2], w=self.target_rot[3])
                 self.publisher_controller_right.publish(ee_pos_msg)
                     
                 #store variables to save
@@ -200,6 +203,7 @@ class VRCommands:
                 
                 #rec variables
                 if self.recording>0.0:
+                    print("data size: " + str(self.traj_data.size()))
                     rec_joint_action = copy.deepcopy(np.expand_dims(np.array(velocity_msg_right.data), 0))
                     rec_pos = np.expand_dims(np.array(rec_pos_), 0)
                     rec_or = np.expand_dims(np.array(rec_or_), 0)
@@ -259,9 +263,20 @@ class VRCommands:
 
     def callback_vr_position_right_arm(self,vr_pose):
         vr_old_pos = copy.deepcopy(self.vr_pos)
-        self.vr_pos[0],self.vr_pos[1],self.vr_pos[2] = vr_pose.pose.position.x, vr_pose.pose.position.y, vr_pose.pose.position.z
-        self.vr_rot = vr_pose.pose.orientation
+        self.vr_pos[0],self.vr_pos[1],self.vr_pos[2] = vr_pose.pose.position.x, -vr_pose.pose.position.y, vr_pose.pose.position.z
         self.d_vr_pos = (self.vr_pos - vr_old_pos)*self.k_p
+        self.target_rot[0] = vr_pose.pose.orientation.x
+        self.target_rot[1] = vr_pose.pose.orientation.y
+        self.target_rot[2] = vr_pose.pose.orientation.z
+        self.target_rot[3] = vr_pose.pose.orientation.w
+
+    def callback_vr_orientation_right_arm(self, vr_twist):
+        vr_old_rot = copy.deepcopy(np.expand_dims(self.curr_quat[0], -1))
+        wx, wy, wz = vr_twist.angular.x, vr_twist.angular.y, vr_twist.angular.z
+        delta_theta = np.array([wx, wy, wz])
+        delta_quaternion = tf.transformations.quaternion_from_euler(*delta_theta)
+        self.target_rot = tf.transformations.quaternion_multiply(vr_old_rot, np.expand_dims(delta_quaternion, -1))
+        self.target_rot = self.target_rot / np.linalg.norm(self.target_rot)
 
 
     def callback_grapes_info(self, grapes_data):
@@ -274,7 +289,9 @@ class VRCommands:
             g_pos, _ = self.get_transform(target_frame='base_footprint',source_frame=f'Bunch_{i}')
             poses.append(g_pos)
             dist = np.linalg.norm(np.array(ee_pos)-np.array(g_pos))
-            if dist<0.1: print(f'{i} grape removed')
+            if dist < 0.1:
+                self.simulator_remove_grape_bunch(int(i))
+                print(f'\n{i} grape removed')
         self.grapes_pos = np.expand_dims(np.array(poses),0)
     
     
@@ -292,7 +309,7 @@ class VRCommands:
         self.block = curr_commands[self.block_command] 
         self.save = curr_commands[self.save_command] 
 
-        if curr_commands['A']  and curr_commands['B']:
+        if curr_commands['A'] and curr_commands['B']:
             self.resetting = True
 
     def callback_joint_state(self,joints_msg):

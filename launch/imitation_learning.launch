@@ -18,7 +18,7 @@
     <include file="$(find main_loop)/launch/main_loop_v2.launch"/>
     
     <!-- Running low-level commands -->
-    <node pkg="imitation_learning" type="imitation_commands.py" name="imitation_commands_node" output="screen"/>
+    <node pkg="imitation_learning" type="imitation_commands_new.py" name="imitation_commands_node" output="screen"/>
 
 
 </launch>

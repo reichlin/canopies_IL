@@ -64,8 +64,10 @@ def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_
             if i == 'object_pos':
                 ee_pos = dataset[name2arr['ee_pos']]
                 obj_poses = dataset[name2arr['obj_poses']]
-                obj_poses = np.array(np.split(obj_poses,obj_poses.shape[0]/3))
-                target_pos = get_closest_obj(obj_poses, ee_pos[-1]).flatten() 
+                grape_idx = np.argmin(np.sum(np.abs(ee_pos[-1] - obj_poses[0]), -1))
+                target_pos = obj_poses[:,grape_idx]
+                # obj_poses = np.array(np.split(obj_poses,obj_poses.shape[1]/3))
+                # target_pos = get_closest_obj(obj_poses, ee_pos[-1]).flatten()
                 input_i = np.tile(target_pos, (target_trajectory_len, 1))
             elif i == 'last_ee_pos':
                 ee_pos = dataset[name2arr['ee_pos']]
@@ -111,6 +113,7 @@ def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_
 
 
         # Concatenate pos, vel, and grape_pos_flat to form input
+        inputs_list[0] = inputs_list[0][:len(inputs_list[1])]
         inputs = np.concatenate(inputs_list, axis=1)
         labels = np.concatenate(outputs_list, axis=1)
 
@@ -122,7 +125,7 @@ def load_data(data_path, input_ids=['object_pos','ee_pos'], output_ids=['joints_
 
     print(f'Loaded {len(all_inputs)} trajectories (out of {len(data_files)}) for a tot of {labels.shape[0]} samples!')
 
-    inputs_train, inputs_test, labels_train, labels_test =  inputs, inputs, labels, labels
+    inputs_train, inputs_test, labels_train, labels_test = inputs, inputs, labels, labels
 
     # Convert data into PyTorch tensors
     X_train_tensor = torch.tensor(inputs_train,dtype=torch.float32)
@@ -217,8 +220,13 @@ def load_trajectories(data_path, n_frames=1, n_freq=1, max_number=100,  task=Non
         # get the observations(goal, joint_pos, joint_vel) and actions from the dataset
         ee_positions = dataset[name2arr['ee_pos']]
         obj_poses = dataset[name2arr['obj_poses']]
-        obj_poses = np.array(np.split(obj_poses,obj_poses.shape[0]/3))
-        target_pos = get_closest_obj(obj_poses, ee_positions[-1]).flatten() 
+        grape_idx = np.argmin(np.sum(np.abs(ee_positions[-1] - obj_poses[0]), -1))
+        target_pos = obj_poses[:, grape_idx]
+        # obj_poses = np.array(np.split(obj_poses,obj_poses.shape[1]/3))
+        # target_pos = get_closest_obj(obj_poses, ee_pos[-1]).flatten()
+        # input_i = np.tile(target_pos, (target_trajectory_len, 1))
+        # obj_poses = np.array(np.split(obj_poses,obj_poses.shape[0]/3))
+        # target_pos = get_closest_obj(obj_poses, ee_positions[-1]).flatten()
         joint_poses = list(dataset[name2arr['joints_pos']])
         joint_vels = list(dataset[name2arr['joints_vel']])
         n = len(joint_poses)
@@ -245,7 +253,7 @@ def load_trajectories(data_path, n_frames=1, n_freq=1, max_number=100,  task=Non
         vel_stack = deque([joint_vels[0]]*n_frames, maxlen = n_frames)
         pos_0 = np.array(pos_stack).flatten().squeeze()
         vel_0 = np.array(vel_stack).flatten().squeeze()
-        state_0 = np.concatenate([target_pos, pos_0, vel_0])
+        state_0 = np.concatenate([pos_0, vel_0])
 
         for i in range(1,len(joint_poses)):
             #update the stacks and get the new observations and action
@@ -253,7 +261,7 @@ def load_trajectories(data_path, n_frames=1, n_freq=1, max_number=100,  task=Non
             vel_stack.append(joint_vels[i])
             pos_1 = np.array(pos_stack).flatten()
             vel_1 = np.array(vel_stack).flatten()
-            state_1 = np.concatenate([target_pos, pos_1, vel_1])
+            state_1 = np.concatenate([pos_1, vel_1])
             
             states.append(torch.from_numpy(state_0))        #t=i-1
             ee_pos.append(torch.from_numpy(ee_positions[i-1]))

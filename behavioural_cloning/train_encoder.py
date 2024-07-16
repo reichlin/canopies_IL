@@ -5,7 +5,6 @@ import os
 import numpy as np
 from encoder import EquivariantEncoder
 from utils import load_trajectories, create_data_loader,load_hyperparameters, get_last_checkpoint, get_best_model
-import wandb
 from tqdm import tqdm
 import random
 
@@ -24,7 +23,6 @@ def train(model, dataset, config):
             batch = sample_batch(dataset, config.batch_size, model.device)
             valid_loss = evaluate_model(model, batch)
             log_dict = {'Train Loss': loss, 'Val loss': valid_loss}
-            wandb.log(log_dict)
 
             #save
             if (epoch+1) % 100 == 0:
@@ -34,6 +32,7 @@ def train(model, dataset, config):
                 model.save_model(file_name)
                 if valid_loss < best_loss:
                     best_loss = valid_loss
+                    print(best_loss)
                     file_name = os.path.join(config.save_dir, f'model_{config.param_tag}.pth')
                     model.save_model(file_name)
 
@@ -61,8 +60,6 @@ def evaluate_model(model, batch):
 
 def main():
     config = load_hyperparameters('config/hyperparameters_encoder.yaml')
-    
-    wandb.init(project="Canopies Behavioural Cloning", config=config, name="encoder_training")
 
     data_path = config.load_dir
 

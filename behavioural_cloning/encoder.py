@@ -26,10 +26,11 @@ class EquivariantEncoder(nn.Module):
         print(f"Model parameters loaded from {path}")
 
     def training_step(self, batch):
-        s, dp, ns = batch  
+        s, dp, ns = batch
+        z_0 = self.forward(torch.zeros_like(s))
         z_s = self.forward(s)
         z_ns = self.forward(ns)
-        loss = torch.mean(torch.sum((z_ns - z_s - dp)**2, -1))
+        loss = torch.mean(torch.sum((z_ns - z_s - dp)**2, -1)) + torch.mean(z_0**2)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
