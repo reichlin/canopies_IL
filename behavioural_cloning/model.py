@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from utils_new import MLP
+from utils import MLP
 import os
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
@@ -12,7 +12,7 @@ from torch.distributions.mixture_same_family import MixtureSameFamily
 
 class Model(nn.Module):
 
-    def __init__(self, input_size, goal_size, action_size, N_gaussians, device=None):
+    def __init__(self, input_size, goal_size, action_size, N_gaussians, device='cpu'):
         super(Model, self).__init__()
 
         self.N_gaussians = N_gaussians
@@ -32,9 +32,6 @@ class Model(nn.Module):
             rho = self.MDN(z).view(-1, self.N_gaussians, a.shape[-1])
             return z, a, rho
         return z, None, None
-
-    def select_action(self, s, g):
-        return
 
     def save_model(self, path):
         torch.save(self.state_dict(), path)
@@ -57,6 +54,7 @@ class Model(nn.Module):
         loss_equi = torch.mean(torch.sum((z1 - z - a) ** 2, -1)) + torch.mean(z0 ** 2)
         loss_policy = torch.mean(torch.sum((a_hat - a) ** 2, -1))
 
+        # neg. log. like.
         comp = MultivariateNormal(rho, torch.eye(a_dim).to(z.device) * 0.01)
         mix = Categorical(torch.ones_like(rho[:,:,0]) / self.N_gaussians)
         gmm = MixtureSameFamily(mix, comp)

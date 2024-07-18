@@ -33,86 +33,78 @@ from utils import TrajectoryHandler
 class VRCommands:
     def __init__(self):
 
+       
         # status variables
         self.resetting, self.recording, self.discard, self.save, self.block = False, False, False, False, False
 
         # remote commands
-        self.block_command = rospy.get_param('/commands/block')
-        self.record_command = rospy.get_param('/commands/record')
-        self.discard_command = rospy.get_param('/commands/discard')
-        self.save_command = rospy.get_param('/commands/save')
+        self.block_command = rospy.get_param('/vr_commands/block')
+        self.record_command = rospy.get_param('/vr_commands/record')
+        self.discard_command = rospy.get_param('/vr_commands/discard')
+        self.save_command = rospy.get_param('/vr_commands/save')
+        self.vr_mirroring = rospy.get_param('/vr_commands/mirroring')
 
         # low_level_commands vars
         self.names_right = rospy.get_param('/arm_right_joints')
         self.names_left = rospy.get_param('/arm_left_joints')
         self.k_v = rospy.get_param('/gains/k_v')
         self.k_p = rospy.get_param('/gains/k_p')
-
+        rospy.sleep(2)
 
         # init variables
-        self.init_pos = np.array(rospy.get_param('/ee_init_pos'))
-        self.init_or = np.array(rospy.get_param('/ee_init_or'))
-        self.init_joint_pos = rospy.get_param('/arm_right_init_joint')
-        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right)
-        rospy.set_param('canopies_simulator/joint_states/rate', 100)
+        self.init_pos = np.array(rospy.get_param('ee_init_pos'))
+        self.init_or = np.array(rospy.get_param('ee_init_or'))
+        self.init_joint_pos = rospy.get_param('arm_right_init_joint')
         self.vr_pos = np.array([0.0] * 3)
         self.d_vr_pos = np.array([0.0] * 3)
         self.curr_joints_pos, self.curr_joints_vel = np.zeros((1, 7)), np.zeros((1, 7))
-
         self.threshold = rospy.get_param('/threshold')
-
         self.vr_rot = np.array([0.0, 0.0, 0.0, 1.0])
         self.target_rot = np.array([0.0, 0.0, 0.0, 1.0])
-
+        self.grapes_pos, self.grapes_idx, self.removed_grapes = [],[],[]
 
         # ROS stuff
         rospy.init_node("high_level_controller", anonymous=True)
-
+        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right)
+        rospy.set_param('canopies_simulator/joint_states/rate', 100)
         self.listener = tf.TransformListener()
-        rospy.sleep(2)
-
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm, queue_size=1)
-        # rospy.Subscriber('/q2r_right_hand_twist', Twist, self.callback_vr_orientation_right_arm, queue_size=1)
         rospy.Subscriber('/q2r_right_hand_inputs', OVR2ROSInputs, self.callback_vr_inputs_right_arm, queue_size=1)
         rospy.Subscriber('/canopies_simulator/joint_states', JointState, self.callback_joint_state)
-
-
+        rospy.Subscriber('/canopies_simulator/grape_boxes', BoundBoxArray, self.callback_grapes, queue_size=1)
         self.publisher_controller_right = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
         self.publisher_rigth_arm = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command', Float64MultiArray, queue_size=1)
         rate = rospy.get_param('rates/recording')
         self.control_loop_rate = rospy.Rate(rate)
-
         rospy.sleep(2)
+
 
         # For saving trajectories
         rospack = rospkg.RosPack()
         package_path = rospack.get_path('imitation_learning')
-        task = rospy.get_param('task')
-        save_dir = os.path.join(package_path, 'data', task)
+        self.task = rospy.get_param('task')
+        data_folder = rospy.get_param('folders/data')
+        save_dir = os.path.join(package_path, data_folder, self.task)
         self.traj_data = TrajectoryHandler(save_dir)
-
         rospy.loginfo('VRCommands initialized')
 
 
     def main(self):
 
-        rospy.loginfo('Beginning ...')
+        rospy.loginfo(f'Beginning task "{self.task}" ...')
+
+        ## ----------------- SETUP -----------------
 
         # collecting_init_values
-        joints_msg = rospy.wait_for_message('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, timeout=None)
-        self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
-        self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
+        #joints_msg = rospy.wait_for_message('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, timeout=None)
+        #self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
+        #self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
 
-        # get grapes position
-        grapes_data = rospy.wait_for_message('/canopies_simulator/grape_boxes', BoundBoxArray, timeout=None)
-        grapes_pos, grapes_idx, removed_grapes = [], [], []
-        for box in grapes_data.boxes:
-            grapes_idx.append(box.index)
-            g_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{box.index}')
-            grapes_pos.append(g_pos)
-        grapes_pos = np.array(grapes_pos)
-
-        rospy.loginfo("starting ...")
+        # init vel commands
+        velocity_msg_right = Float64MultiArray()
+        velocity_msg_left = Float64MultiArray()
+        velocity_msg_right.data = [0.0] * 7
+        velocity_msg_left.data = [0.0] * 7
 
         # Initialize arm in a standard position
         ee_pos_msg = ExternalReference()
@@ -121,48 +113,27 @@ class VRCommands:
         self.publisher_controller_right.publish(ee_pos_msg)
         target_pos, target_or = self.init_pos, self.init_or
 
-        # init vel commands
-        velocity_msg_right = Float64MultiArray()
-        velocity_msg_left = Float64MultiArray()
-        velocity_msg_right.data = [0.0] * 7
-        velocity_msg_left.data = [0.0] * 7
-
         rospy.sleep(2)
 
-        rospy.loginfo('Ready...')
-        input('ROS workspace is ready. Press something to start!')
 
+        ## ---------------- SIM LOOP ----------------
+        input('ROS workspace is ready. Press something to start!')
+        self.sim_step=0
         while not rospy.is_shutdown():
-            # if self.resetting:
-            #     ee_pos_msg.position = Point(x=self.target_pos[0], y=self.target_pos[1], z=self.target_pos[2])
-            #     ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-            #     self.publisher_controller_right.publish(ee_pos_msg)
-            #
-            #     joint_command, joint_error = self.joint_PD(self.init_joint_pos)
-            #     velocity_msg_right.data = joint_command
-            #     self.publisher_rigth_arm.publish(velocity_msg_right)
-            #     if joint_error < 0.3:
-            #         print(f'Resetting accomplished: {joint_error}')
-            #         self.resetting = False
-            #         self.target_pos = np.array([0.0] * 3)
-            #         self.d_vr_pos = np.array([0.0] * 3)
-            #     self.control_loop_rate.sleep()
-            #     continue
 
             if self.discard:
                 if self.traj_data.size() > 10:
-                    print('Trajectory discarded')
+                    rospy.loginfo('Trajectory discarded')
                 self.traj_data.reset()
-
 
             elif self.save:
                 trj_n = str(round(datetime.datetime.now().timestamp()))
-                self.traj_data.save_trajectory(trj_n)
+                save_path = self.traj_data.save_trajectory(trj_n)
+                rospy.loginfo(f'Trajectory saved in {save_path}')
                 self.traj_data.reset()
                 self.save = False
 
             elif self.block:
-                # print('Blocking')
                 velocity_msg_right.data = [0.0] * 7
                 self.publisher_rigth_arm.publish(velocity_msg_right)
 
@@ -179,14 +150,8 @@ class VRCommands:
                 rec_joints_pos = copy.deepcopy(self.curr_joints_pos)
                 rec_joints_vel = copy.deepcopy(self.curr_joints_vel)
                 rec_pos, rec_or = self.get_transform(target_frame='base_footprint', source_frame=f'inner_finger_1_right_link')
-
-                # check if current position is on a grape
-                threshold = (np.linalg.norm(np.array(rec_pos) - grapes_pos, axis=-1) < self.threshold)*1.
-                for i in np.nonzero(threshold)[0]:
-                    if grapes_idx[i] not in removed_grapes:
-                        self.simulator_remove_grape_bunch(int(grapes_idx[i]))
-                        print(f'\n{grapes_idx[i]} grape removed')
-                        removed_grapes.append(grapes_idx[i])
+                
+                self.grape_revove_check(rec_pos)
 
                 # wait for the velocity command
                 joint_vel_ik_right = rospy.wait_for_message('/arm_right_forward_velocity_controller/command', Float64MultiArray, timeout=None)
@@ -198,7 +163,7 @@ class VRCommands:
 
                 # rec variables
                 if self.recording > 0.0:
-                    print("data size: " + str(self.traj_data.size()))
+                    self.show_update(f"data size: {self.traj_data.size()}")
 
                     self.traj_data.store_data(
                         (
@@ -208,11 +173,12 @@ class VRCommands:
                             np.expand_dims(np.array(rec_or), 0),
                             copy.deepcopy(np.expand_dims(np.array(velocity_msg_right.data), 0)),
                             np.expand_dims(self.d_vr_pos, 0),
-                            grapes_pos
+                            self.grapes_pos
                         )
                     )
-
+            self.sim_step+=1
             self.control_loop_rate.sleep()
+
 
     def simulator_remove_grape_bunch(self, id_: int):
         rospy.wait_for_service('/simulator')
@@ -233,8 +199,18 @@ class VRCommands:
 
     def callback_vr_position_right_arm(self, vr_pose):
         vr_old_pos = copy.deepcopy(self.vr_pos)
-        self.vr_pos[0], self.vr_pos[1], self.vr_pos[2] = vr_pose.pose.position.x, -vr_pose.pose.position.y, vr_pose.pose.position.z
+        mirror = -1. if self.vr_mirroring else 1.
+        self.vr_pos[0], self.vr_pos[1], self.vr_pos[2] = vr_pose.pose.position.x, mirror*vr_pose.pose.position.y, vr_pose.pose.position.z
         self.d_vr_pos = (self.vr_pos - vr_old_pos) * self.k_p
+
+    def callback_grapes(self, grapes_data):
+        grapes_pos, grapes_idx = [], []
+        for box in grapes_data.boxes:
+            grapes_idx.append(box.index)
+            g_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{box.index}')
+            grapes_pos.append(g_pos)
+        self.grapes_pos = np.array(grapes_pos)
+        self.grapes_idx = grapes_idx
 
     # def callback_vr_orientation_right_arm(self, vr_twist):
     #     vr_old_rot = copy.deepcopy(np.expand_dims(self.vr_rot, -1))
@@ -242,10 +218,10 @@ class VRCommands:
     #     delta_theta = np.array([wx, wy, wz])
     #     delta_quaternion = tf.transformations.quaternion_from_euler(*delta_theta)
     #     self.target_rot = tf.transformations.quaternion_multiply(vr_old_rot, np.expand_dims(delta_quaternion, -1))
-    #     print("target_rot before: ", self.target_rot)
+    #     rospy.loginfo("target_rot before: ", self.target_rot)
     #     self.target_rot = self.target_rot / np.linalg.norm(self.target_rot)
     #     self.vr_rot = self.target_rot[:, 0]
-    #     print("target_rot: ", self.vr_rot)
+    #     rospy.loginfo("target_rot: ", self.vr_rot)
 
     def callback_vr_inputs_right_arm(self, vr_inputs):
 
@@ -271,6 +247,33 @@ class VRCommands:
             index_in_msg = self.names_right.index(name)
             self.curr_joints_pos[0, index_in_msg] = joints_msg.position[index_in_joint_state]
             self.curr_joints_vel[0, index_in_msg] = joints_msg.velocity[index_in_joint_state]
+
+    ## OTHER METHODS
+    def grape_revove_check(self, ee_pos):
+        dists = np.linalg.norm(np.array(ee_pos) - self.grapes_pos, axis=-1)
+        if self.sim_step%50==0:
+            self.show_update(f'{self.grapes_idx[np.argmin(dists)]}: {np.min(dists)}')
+        threshold = (dists < self.threshold)*1.
+        for i in np.nonzero(threshold)[0]:
+            if self.grapes_idx[i] not in self.removed_grapes:
+                rospy.loginfo(f'\n{self.grapes_idx[i]} grape removed')
+                #self.simulator_remove_grape_bunch(int(self.grapes_idx[i]))
+                #self.removed_grapes.append(self.grapes_idx[i])
+
+    def register_grapes(self):
+        grapes_pos, grapes_idx = [], []
+        grapes_data = rospy.wait_for_message('/canopies_simulator/grape_boxes', BoundBoxArray, timeout=None)
+        for box in grapes_data.boxes:
+            grapes_idx.append(box.index)
+            g_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{box.index}')
+            grapes_pos.append(g_pos)
+        grapes_pos = np.array(grapes_pos)
+        return grapes_pos, grapes_idx, []
+
+    def show_update(self, a, n=50):
+        if self.sim_step%n==0:
+            rospy.loginfo(a)
+
 
 
 if __name__ == "__main__":

@@ -27,9 +27,9 @@ class MLP(nn.Module):
 
 class Agent(nn.Module):
 
-    def __init__(self, input_size, goal_size, action_size, N_gaussians, device=None):
+    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable= True,  device=None):
         super(Agent, self).__init__()
-
+        self.stable = stable
         self.N_gaussians = N_gaussians
 
         self.encoder = MLP(input_size, action_size)
@@ -42,14 +42,18 @@ class Agent(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr=0.001)
         self.device = device
 
-    def select_action(self, s, g):
+    def select_action(self, s, g,):
 
         z = self.encoder(s)
         mu = self.MDN(g).view(25, 3)
         rho, grad = self.density_estimator.get_gradient(z, mu)
         a_IL = self.policy(s, g)
         p = torch.tanh(rho * 0.002)
-        return a_IL #p*a_IL + (1-p)*grad
+
+        if self.stable:
+            return p*a_IL + (1-p)*grad
+        else:
+            return a_IL
 
     def save_model(self, path):
         torch.save(self.state_dict(), path)

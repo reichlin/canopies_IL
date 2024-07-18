@@ -1,20 +1,14 @@
 #data
 input_size: 14 #17
-input_ids: ['object_pos', 'joints_pos','joints_vel'] #['last_ee_pos', 'joints_pos','joints_vel']
 n_frames: 4
-output_ids: ['vr_act']
-data_freq: 50 #freq of the dataset (when collected)
-target_freq: 1 #freq of the dataset (when processed)
-hidden_size1: 128
-hidden_size2: 128
 output_size: 3
 
 #training
 lr: 0.001
 epochs: 20000
-batch_size: 32
-load_dir: /home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data
-save_dir: ./params #/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/src/agent_params
-task: grasp #push
-device: cuda
-#
+batch_size: 128
+load_dir: data
+save_dir: params
+checkpoint_dir: save/checkpoints
+task: grasp
+N_gaussians: 25

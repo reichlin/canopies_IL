@@ -4,6 +4,7 @@ import torch.optim as optim
 import os
 import numpy as np
 from collections import deque, namedtuple
+import rospy
 
 name2arr = {
     'joints_pos': 'arr_0',
@@ -46,29 +47,32 @@ class TrajectoryHandler:
         self.data_external_objs.append(data[6])
 
     def show_current_status(self):
-        print('------------- SUMMARY -------------')
-        print('joint positions: ', len(self.data_joints_pos))
-        print('joint velocities: ', len(self.data_joints_vel))
-        print('ee positions: ', len(self.data_pos))
-        print('ee orientations: ', len(self.data_or))
-        print('joint vel actions: ', len(self.data_joint_act))
-        print('vr commands: ', len(self.data_vr_act))
-        print('------------------------------------')
+        rospy.loginfo(f'------------- SUMMARY -------------')
+        rospy.loginfo(f'joint positions: {len(self.data_joints_pos)}')
+        rospy.loginfo(f'joint velocities: {len(self.data_joints_vel)}')
+        rospy.loginfo(f'ee positions: {len(self.data_pos)}')
+        rospy.loginfo(f'ee orientations: {len(self.data_or)}')
+        rospy.loginfo(f'joint vel actions: {len(self.data_joint_act)}')
+        rospy.loginfo(f'vr commands: {len(self.data_vr_act)}')
+        rospy.loginfo(f'------------------------------------')
 
     def save_trajectory(self, name):
         if self.size() > 10:
             name = f"traj_{name}.npz"
             file = os.path.join(self.save_dir, name)
             np.savez(file,
-                     np.concatenate(self.data_joints_pos, 0),
-                     np.concatenate(self.data_joints_vel, 0),
-                     np.concatenate(self.data_pos, 0),
-                     np.concatenate(self.data_or, 0),
-                     np.concatenate(self.data_joint_act, 0),
-                     self.data_external_objs,
-                     np.concatenate(self.data_vr_act, 0),
+                     joints_pos=np.concatenate(self.data_joints_pos, 0),
+                     joints_vel=np.concatenate(self.data_joints_vel, 0),
+                     ee_pos=np.concatenate(self.data_pos, 0),
+                     ee_or=np.concatenate(self.data_or, 0),
+                     command_vel=np.concatenate(self.data_joint_act, 0),
+                     obj_poses=self.data_external_objs,
+                     vr_act=np.concatenate(self.data_vr_act, 0),
                      )
             self.show_current_status()
+            return file
+        else:
+            return 'NEVER'
 
 def process_obs(obs_dict):
     joint_pos = torch.from_numpy(np.expand_dims(np.stack(obs_dict['joint_pos'], axis=0).flatten(), 0)).float()

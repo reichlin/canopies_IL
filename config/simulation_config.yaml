@@ -5,24 +5,26 @@ ee_init_or: [0.0, 0.0, 0.0, 1.0]
 arm_right_init_joint: [-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0]
 
 gains:
-  k_v: 20.0
-  k_p: 4.0
+  k_v: 30.0
+  k_p: 1.0
 
 rates:
   recording: 50
   testing: 1
 
-threshold: 0.1
+threshold: 0.15
 
-commands:
+vr_commands:
   save: "A"
   discard: "B"
   record: "trigger"
   block: "middle" 
+  mirroring: 1
 
 folders:
-  data: "data"
-  load: "behavioural_cloning/params"
+  data: data
+  load: behavioural_cloning/params
+
 
 agent_hp:
   n_frames: 4

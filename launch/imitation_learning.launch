@@ -9,6 +9,7 @@
     <param name="agent_name" value='$(arg agent)'/>
 
     <rosparam file="$(find imitation_learning)/config/simulation_config.yaml" command="load"/>
+    <rosparam file="$(find imitation_learning)/behavioural_cloning/config/hyperparameters.yaml" command="load"/>
 
     <!-- Launching the simulator -->
     <include file="$(find canopies_simulator)/launch/simulator.launch"/>
