@@ -176,6 +176,7 @@ class VRCommands:
                             self.grapes_pos
                         )
                     )
+
             self.sim_step+=1
             self.control_loop_rate.sleep()
 

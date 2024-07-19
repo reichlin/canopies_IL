@@ -27,7 +27,7 @@ class MLP(nn.Module):
 
 class Agent(nn.Module):
 
-    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable= True,  device=None):
+    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable=True,  device=None):
         super(Agent, self).__init__()
         self.stable = stable
         self.N_gaussians = N_gaussians

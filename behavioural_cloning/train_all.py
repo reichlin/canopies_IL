@@ -7,7 +7,7 @@ from model import Model
 from utils import load_data, get_config
 from tqdm import tqdm
 from torch.utils.data import DataLoader, TensorDataset
-import wandb
+#import wandb
 
 def train(agent, loader):
     pbar = tqdm(total=config.epochs)
@@ -30,7 +30,7 @@ def train(agent, loader):
             agent.save_model(file_name)
 
             log_dict = {'train_loss': avg_loss}
-            wandb.log(log_dict)
+            #wandb.log(log_dict)
 
             if avg_loss < best_loss:
                 # save best params
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     config = get_config('config/hyperparameters.yaml')
 
     wb_run = f'{config.task}'
-    wandb.init(project="Behavioural_cloning", config=config, name=wb_run, mode=config.wb_mode, group=config.wb_group)
+    #wandb.init(project="Behavioural_cloning", config=config, name=wb_run, mode=config.wb_mode, group=config.wb_group)
 
     main()
 

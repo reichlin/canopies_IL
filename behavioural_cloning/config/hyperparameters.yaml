@@ -10,5 +10,5 @@ batch_size: 128
 load_dir: data
 save_dir: params
 checkpoint_dir: save/checkpoints
-task: grasp
+task: grasp_new
 N_gaussians: 25
