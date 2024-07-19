@@ -96,7 +96,14 @@ class VRCommands:
         rospy.loginfo('VRCommands initialized')
 
 
-        '''#TORSO
+
+        print('wating for q2r msg ....')
+        vr_msg = rospy.wait_for_message('/q2r_right_hand_pose', Pose, timeout=None)
+        self.vr_pos = np.array([vr_msg.pose.position.x, vr_msg.pose.position.y, vr_msg.pose.position.z])
+        self.vr_pos_stack.clear()
+
+
+        #TORSO
         joint_traj = JointTrajectory()
         joint_traj.header.stamp = rospy.Time.now()
         joint_traj.joint_names = ['torso_base_joint']
@@ -110,12 +117,11 @@ class VRCommands:
         point.time_from_start = rospy.Duration(1.0)
 
         # Add the point to the trajectory
-        joint_traj.points.append(point)'''
+        joint_traj.points.append(point)
 
 
     def main(self):
 
-        rospy.loginfo(f'Beginning task "{self.task}" ...')
 
         ## ----------------- SETUP -----------------
 
@@ -138,8 +144,10 @@ class VRCommands:
         target_pos, target_or = self.init_pos, self.init_or
         rec_pos, rec_or = self.get_transform(target_frame='base_footprint', source_frame=f'inner_finger_1_right_link')
         
-        self.vr_pos_stack.clear()
+
         rospy.sleep(1)
+        
+        rospy.loginfo(f'Beginning task "{self.task}" ...')
 
         ## ---------------- SIM LOOP ----------------
         #input('ROS workspace is ready. Press something to start!')
@@ -164,7 +172,7 @@ class VRCommands:
 
             else:
                 act = self.compute_vr_command()
-                target_pos += act
+                target_pos += np.array([0.]*3)
 
                 ee_pos_msg.position = Point(x=target_pos[0], y=target_pos[1], z=target_pos[2])
                 ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=0.0)
