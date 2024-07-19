@@ -22,6 +22,8 @@ from scipy.spatial.transform import Rotation as R
 from canopies_simulator.srv import Simulator
 # import the utils libraries
 import rospkg
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
 
 rospack = rospkg.RosPack()
 package_path = rospack.get_path('imitation_learning')
@@ -57,23 +59,28 @@ class VRCommands:
         self.init_joint_pos = rospy.get_param('arm_right_init_joint')
         self.vr_pos = np.array([0.0] * 3)
         self.d_vr_pos = np.array([0.0] * 3)
-        self.curr_joints_pos, self.curr_joints_vel = np.zeros((1, 7)), np.zeros((1, 7))
-        self.threshold = rospy.get_param('/threshold')
+        self.vr_pos_stack = []
         self.vr_rot = np.array([0.0, 0.0, 0.0, 1.0])
         self.target_rot = np.array([0.0, 0.0, 0.0, 1.0])
+        self.curr_joints_pos, self.curr_joints_vel = np.zeros((1, 7)), np.zeros((1, 7))
+        self.threshold = rospy.get_param('/threshold')
         self.grapes_pos, self.grapes_idx, self.removed_grapes = [],[],[]
 
         # ROS stuff
         rospy.init_node("high_level_controller", anonymous=True)
         rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right)
         rospy.set_param('canopies_simulator/joint_states/rate', 100)
+
+       
         self.listener = tf.TransformListener()
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm, queue_size=1)
         rospy.Subscriber('/q2r_right_hand_inputs', OVR2ROSInputs, self.callback_vr_inputs_right_arm, queue_size=1)
+        #rospy.Subscriber('/q2r_right_hand_twist', Twist, self.callback_vr_orientation_right_arm, queue_size=1)
         rospy.Subscriber('/canopies_simulator/joint_states', JointState, self.callback_joint_state)
         rospy.Subscriber('/canopies_simulator/grape_boxes', BoundBoxArray, self.callback_grapes, queue_size=1)
         self.publisher_controller_right = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
         self.publisher_rigth_arm = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command', Float64MultiArray, queue_size=1)
+        self.publisher_torso = rospy.Publisher('/canopies_simulator/torso_controller/command', JointTrajectory, queue_size=1)
         rate = rospy.get_param('rates/recording')
         self.control_loop_rate = rospy.Rate(rate)
         rospy.sleep(2)
@@ -87,6 +94,23 @@ class VRCommands:
         save_dir = os.path.join(package_path, data_folder, self.task)
         self.traj_data = TrajectoryHandler(save_dir)
         rospy.loginfo('VRCommands initialized')
+
+
+        '''#TORSO
+        joint_traj = JointTrajectory()
+        joint_traj.header.stamp = rospy.Time.now()
+        joint_traj.joint_names = ['torso_base_joint']
+
+        # Create a JointTrajectoryPoint
+        point = JointTrajectoryPoint()
+        point.positions = [1.0, 2.0, 3.0]
+        point.velocities = [0.5, 0.5, 0.5]
+        point.accelerations = [0.1, 0.1, 0.1]
+        point.effort = [0.0, 0.0, 0.0]
+        point.time_from_start = rospy.Duration(1.0)
+
+        # Add the point to the trajectory
+        joint_traj.points.append(point)'''
 
 
     def main(self):
@@ -112,12 +136,13 @@ class VRCommands:
         ee_pos_msg.orientation = Quaternion(x=self.init_or[0], y=self.init_or[1], z=self.init_or[2], w=self.init_or[3]) #self.init_or
         self.publisher_controller_right.publish(ee_pos_msg)
         target_pos, target_or = self.init_pos, self.init_or
-
-        rospy.sleep(2)
-
+        rec_pos, rec_or = self.get_transform(target_frame='base_footprint', source_frame=f'inner_finger_1_right_link')
+        
+        self.vr_pos_stack.clear()
+        rospy.sleep(1)
 
         ## ---------------- SIM LOOP ----------------
-        input('ROS workspace is ready. Press something to start!')
+        #input('ROS workspace is ready. Press something to start!')
         self.sim_step=0
         while not rospy.is_shutdown():
 
@@ -138,19 +163,18 @@ class VRCommands:
                 self.publisher_rigth_arm.publish(velocity_msg_right)
 
             else:
-
-                target_pos += self.d_vr_pos
+                act = self.compute_vr_command()
+                target_pos += act
 
                 ee_pos_msg.position = Point(x=target_pos[0], y=target_pos[1], z=target_pos[2])
-                ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-                # ee_pos_msg.orientation = Quaternion(x=self.target_rot[0], y=self.target_rot[1], z=self.target_rot[2], w=self.target_rot[3])
+                ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=0.0)
+                #ee_pos_msg.orientation = Quaternion(x=self.target_rot[0], y=self.target_rot[1], z=self.target_rot[2], w=self.target_rot[3])
                 self.publisher_controller_right.publish(ee_pos_msg)
 
                 # store variables to save
                 rec_joints_pos = copy.deepcopy(self.curr_joints_pos)
                 rec_joints_vel = copy.deepcopy(self.curr_joints_vel)
                 rec_pos, rec_or = self.get_transform(target_frame='base_footprint', source_frame=f'inner_finger_1_right_link')
-                
                 self.grape_revove_check(rec_pos)
 
                 # wait for the velocity command
@@ -160,7 +184,6 @@ class VRCommands:
                     velocity_msg_right.data[index_in_msg] = joint_vel_ik_right.data[i] * self.k_v
 
                 self.publisher_rigth_arm.publish(velocity_msg_right)
-
                 # rec variables
                 if self.recording > 0.0:
                     self.show_update(f"data size: {self.traj_data.size()}")
@@ -169,8 +192,8 @@ class VRCommands:
                         (
                             rec_joints_pos,
                             rec_joints_vel,
-                            np.expand_dims(np.array(rec_pos), 0),
-                            np.expand_dims(np.array(rec_or), 0),
+                            np.expand_dims(rec_pos, 0),
+                            np.expand_dims(rec_or, 0),
                             copy.deepcopy(np.expand_dims(np.array(velocity_msg_right.data), 0)),
                             np.expand_dims(self.d_vr_pos, 0),
                             self.grapes_pos
@@ -190,7 +213,7 @@ class VRCommands:
             # Wait for the transform to become available and get the transform
             self.listener.waitForTransform(target_frame, source_frame, rospy.Time(), rospy.Duration(4.0))
             (trans, rot) = self.listener.lookupTransform(target_frame, source_frame, rospy.Time(0))
-            return trans, rot
+            return np.array(trans), np.array(rot)
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException) as e:
             rospy.logerr(f"Failed to get transform from {source_frame} to {target_frame}: {e}")
             return None, None
@@ -198,10 +221,13 @@ class VRCommands:
     ##  -----  CALLBACKS  ------------------------------------------------
 
     def callback_vr_position_right_arm(self, vr_pose):
-        vr_old_pos = copy.deepcopy(self.vr_pos)
+        mirror = -1. if self.vr_mirroring else 1.
+        self.vr_pos_stack.append(np.array([vr_pose.pose.position.x, mirror*vr_pose.pose.position.y, vr_pose.pose.position.z]))
+        '''vr_old_pos = copy.deepcopy(self.vr_pos)
         mirror = -1. if self.vr_mirroring else 1.
         self.vr_pos[0], self.vr_pos[1], self.vr_pos[2] = vr_pose.pose.position.x, mirror*vr_pose.pose.position.y, vr_pose.pose.position.z
-        self.d_vr_pos = (self.vr_pos - vr_old_pos) * self.k_p
+        self.d_vr_pos = (self.vr_pos - vr_old_pos) * self.k_p'''
+
 
     def callback_grapes(self, grapes_data):
         grapes_pos, grapes_idx = [], []
@@ -212,16 +238,16 @@ class VRCommands:
         self.grapes_pos = np.array(grapes_pos)
         self.grapes_idx = grapes_idx
 
-    # def callback_vr_orientation_right_arm(self, vr_twist):
-    #     vr_old_rot = copy.deepcopy(np.expand_dims(self.vr_rot, -1))
-    #     wx, wy, wz = vr_twist.angular.x, vr_twist.angular.y, vr_twist.angular.z
-    #     delta_theta = np.array([wx, wy, wz])
-    #     delta_quaternion = tf.transformations.quaternion_from_euler(*delta_theta)
-    #     self.target_rot = tf.transformations.quaternion_multiply(vr_old_rot, np.expand_dims(delta_quaternion, -1))
-    #     rospy.loginfo("target_rot before: ", self.target_rot)
-    #     self.target_rot = self.target_rot / np.linalg.norm(self.target_rot)
-    #     self.vr_rot = self.target_rot[:, 0]
-    #     rospy.loginfo("target_rot: ", self.vr_rot)
+    def callback_vr_orientation_right_arm(self, vr_twist):
+        vr_old_rot = copy.deepcopy(np.expand_dims(self.vr_rot, -1))
+        wx, wy, wz = vr_twist.angular.x, vr_twist.angular.y, vr_twist.angular.z
+        delta_theta = np.array([wx, wy, wz])
+        delta_quaternion = tf.transformations.quaternion_from_euler(*delta_theta)
+        self.target_rot = tf.transformations.quaternion_multiply(vr_old_rot, np.expand_dims(delta_quaternion, -1))
+        #rospy.loginfo(f"target_rot before: {self.target_rot}")
+        self.target_rot = self.target_rot / np.linalg.norm(self.target_rot)
+        self.vr_rot = self.target_rot[:, 0]
+        #rospy.loginfo(f"target_rot: {self.vr_rot}")
 
     def callback_vr_inputs_right_arm(self, vr_inputs):
 
@@ -274,6 +300,14 @@ class VRCommands:
         if self.sim_step%n==0:
             rospy.loginfo(a)
 
+    def compute_vr_command(self):
+        old_vr_pos = copy.deepcopy(self.vr_pos)
+        curr_pos = np.mean(np.stack(self.vr_pos_stack), axis=0)
+        dpos = (old_vr_pos - curr_pos)*self.k_p
+        self.vr_pos = copy.deepcopy(curr_pos)
+        self.vr_pos_stack.clear()
+        return dpos
+
 
 
 if __name__ == "__main__":
@@ -284,3 +318,14 @@ if __name__ == "__main__":
         pass
 
 
+
+
+
+
+'''
+/* -------------------------------- Orientation -------------------------------- 
+
+    Re = quat2rot(Eigen::Vector4d(msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w));
+    (this->task_2_desired_value.tail(4) = this->task_2_initial_value.tail(4) + rot2quat(Re*(Re.transpose()*Re_des)));*/
+
+'''
