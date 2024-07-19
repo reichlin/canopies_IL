@@ -13,6 +13,7 @@ rates:
   testing: 1
 
 threshold: 0.15
+torso_heigth: 0.1
 
 vr_commands:
   save: "A"

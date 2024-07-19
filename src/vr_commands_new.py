@@ -28,6 +28,7 @@ package_path = rospack.get_path('imitation_learning')
 module_path = os.path.join(package_path, '/src/utils')
 sys.path.append(module_path)
 from utils import TrajectoryHandler
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
 class VRCommands:
@@ -45,7 +46,7 @@ class VRCommands:
         self.vr_mirroring = rospy.get_param('/vr_commands/mirroring')
 
         # low_level_commands vars
-        self.names_right = rospy.get_param('/arm_right_joints')
+        self.names_right = rospy.get_param('/arm_right_joints') 
         self.names_left = rospy.get_param('/arm_left_joints')
         self.k_v = rospy.get_param('/gains/k_v')
         self.k_p = rospy.get_param('/gains/k_p')
@@ -65,7 +66,7 @@ class VRCommands:
 
         # ROS stuff
         rospy.init_node("high_level_controller", anonymous=True)
-        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right)
+        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right+ ['torso_lift_joint'])
         rospy.set_param('canopies_simulator/joint_states/rate', 100)
         self.listener = tf.TransformListener()
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm, queue_size=1)
@@ -74,6 +75,8 @@ class VRCommands:
         rospy.Subscriber('/canopies_simulator/grape_boxes', BoundBoxArray, self.callback_grapes, queue_size=1)
         self.publisher_controller_right = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
         self.publisher_rigth_arm = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command', Float64MultiArray, queue_size=1)
+        #self.publisher_torso = rospy.Publisher('/canopies_simulator/torso_controller/command', JointTrajectory, queue_size=1)
+
         rate = rospy.get_param('rates/recording')
         self.control_loop_rate = rospy.Rate(rate)
         rospy.sleep(2)
@@ -88,6 +91,17 @@ class VRCommands:
         self.traj_data = TrajectoryHandler(save_dir)
         rospy.loginfo('VRCommands initialized')
 
+        #lift torso
+        q_torso = rospy.get_param('torso_heigth')
+        velocity_msg_right = Float64MultiArray()
+        velocity_msg_right.data = [0.0] * 7 + [0.1] 
+        self.publisher_rigth_arm.publish(velocity_msg_right)
+        rospy.sleep(1)
+        velocity_msg_right.data = [0.0] * 8 
+        self.publisher_rigth_arm.publish(velocity_msg_right)
+
+        rospy.sleep(3)
+
 
     def main(self):
 
@@ -95,16 +109,11 @@ class VRCommands:
 
         ## ----------------- SETUP -----------------
 
-        # collecting_init_values
-        #joints_msg = rospy.wait_for_message('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, timeout=None)
-        #self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
-        #self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
-
         # init vel commands
         velocity_msg_right = Float64MultiArray()
         velocity_msg_left = Float64MultiArray()
-        velocity_msg_right.data = [0.0] * 7
-        velocity_msg_left.data = [0.0] * 7
+        velocity_msg_right.data = [0.0] * 8
+        velocity_msg_left.data = [0.0] * 8
 
         # Initialize arm in a standard position
         ee_pos_msg = ExternalReference()
@@ -134,7 +143,7 @@ class VRCommands:
                 self.save = False
 
             elif self.block:
-                velocity_msg_right.data = [0.0] * 7
+                velocity_msg_right.data = [0.0] * 8
                 self.publisher_rigth_arm.publish(velocity_msg_right)
 
             else:
