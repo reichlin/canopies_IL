@@ -6,6 +6,31 @@ import os
 from utils_rl import Agent
 import torch
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 data2label = {
     'traj_imitation.npz': ('IL trajectory','blue'), 
     #'traj_imitation_stable.npz': 'IL traj stable', #0.001
@@ -125,7 +150,7 @@ def plot_trajectories(data_dir):
     p_min, p_max = np.min(grid_points_prob), np.max(grid_points_prob)
 
     for p,point,i in zip(grid_points_prob, grid_points, range(n)):
-        if i%1 ==0:
+        if i%1 == 0:
             p_new = rescale(p.item(),p_min, p_max)
             ax.scatter(point[0], point[1], point[2], alpha=p_new, color=cmap(p_new), s=100)#, label='probability distribution' if i<1 else '')
     plt.xlabel('X axis')

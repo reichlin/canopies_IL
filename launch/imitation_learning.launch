@@ -4,13 +4,13 @@
     <arg name="rec" default='true'/>
     <arg name="agent" default='stable_agent'/>
 
-    <param name="task" value="$(arg task)" />
-    <param name="rec" value="$(arg rec)" />
-    <param name="agent_name" value='$(arg agent)'/>
-
     <rosparam file="$(find imitation_learning)/config/simulation_config.yaml" command="load"/>
     <rosparam file="$(find imitation_learning)/behavioural_cloning/config/hyperparameters.yaml" command="load"/>
 
+
+    <param name="task" value="$(arg task)" />
+    <param name="rec" value="$(arg rec)" />
+    <param name="agent_name" value='$(arg agent)'/>
     <!-- Launching the simulator -->
     <include file="$(find canopies_simulator)/launch/simulator.launch"/>
     <!-- Launching the low-level controller -->
@@ -19,6 +19,8 @@
     <include file="$(find main_loop)/launch/main_loop_v2.launch"/>
     
     <!-- Running low-level commands -->
+    <node pkg="imitation_learning" type="frame_listener.py" name="frame_listener" output="screen"/>
+
     <node pkg="imitation_learning" type="imitation_commands_new.py" name="imitation_commands_node" output="screen"/>
 
 

@@ -30,9 +30,8 @@ rospack = rospkg.RosPack()
 package_path = rospack.get_path('imitation_learning')
 module_path = os.path.join(package_path, '/src/utils')
 sys.path.append(module_path)
-from utils import TrajectoryHandler, process_obs
+from utils import Buffer
 from utils_rl import Agent
-import datetime
 
 
 
@@ -49,69 +48,93 @@ class ImitationNode:
         self.names_right = rospy.get_param('/arm_right_joints')
         self.load_dir = os.path.join(package_path, rospy.get_param('/folders/load'))
         self.data_dir = os.path.join(package_path, rospy.get_param('/folders/data'))
+        self.save_dir = os.path.join(package_path, rospy.get_param('/folders/result'))
+
         self.recording = rospy.get_param('rec')
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.threshold = rospy.get_param('/threshold')
         self.n_frames = rospy.get_param('/agent_hp/n_frames')
 
-
+#[0.64730491 0.00703621 1.25233966]
         #init variables
         self.curr_joints_pos, self.curr_joints_vel = np.zeros((1, 7)), np.zeros((1, 7))
         self.velocity_msg_right = Float64MultiArray()
-        self.velocity_msg_right.data = [0.0] * 7
+        self.velocity_msg_right.data = [0.0] * 8
         self.goal = None
         self.pos = np.zeros(3)
         self.k_v = rospy.get_param('/gains/k_v')
+
+        # setup the recorder
+        if self.recording:
+            self.traj_buffer = Buffer(self.save_dir)
 
         # ROS stuff
         rospy.Subscriber('/canopies_simulator/joint_states', JointState, self.callback_joint_state)
         rospy.Subscriber('/canopies_simulator/grape_boxes', BoundBoxArray, self.callback_grapes, queue_size=1)
         self.publisher_joint_commands = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command', Float64MultiArray, queue_size=1)
         self.publisher_ee_commands = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
-        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right)
+        rospy.Subscriber('/direct_kinematics/rigth_arm_end_effector', PoseStamped, self.callback_end_effector, queue_size=1)
+
+        rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right+ ['torso_lift_joint'])
         rospy.set_param('canopies_simulator/joint_states/rate', 100)
         self.tf_listener = tf.TransformListener()
         rate = rospy.get_param('rates/testing')
-        self.control_loop_rate = rospy.Rate(50)
+        self.control_loop_rate = rospy.Rate(rate)
+        self.rate=rate
         rospy.sleep(2)
 
         # init agent and load param
-        task = rospy.get_param('task')
-        task = 'grasp_new'
+        self.task = rospy.get_param('task')
+        self.stable = rospy.get_param('stable')
         self.agent = Agent(
-            input_size=rospy.get_param('/agent_hp/input_dim'),
+            input_size= 7, #rospy.get_param('/agent_hp/input_dim')*self.n_frames,
             goal_size=3,
             action_size=rospy.get_param('/agent_hp/output_dim'), 
             N_gaussians=25,
-            stable= True, # if rospy.get_param('agent_name') else False,
+            stable=self.stable, # if rospy.get_param('agent_name') else False,
             device=self.device
         ).to(self.device)
-        
-        model_file = os.path.join(package_path, self.load_dir,f"model_{task}.pth" )
+
+        model_file = os.path.join(package_path, self.load_dir, f"model_{self.task}_50.pth" )
+
         self.agent.load_model(model_file)
 
 
-        # setup the recorder
-        if self.recording:
-            path = os.path.join(self.data_dir, f'{task}_results')
-            self.traj_data = TrajectoryHandler(save_dir=path)
-        
+
+        # init the grapes
+        self.grapes_pos, self.grapes_idx, self.removed_grapes = self.register_grapes()
+
+        # lift torso
+        q_torso = rospy.get_param('torso_height')
+        velocity_msg_right = Float64MultiArray()
+        velocity_msg_right.data = [0.0] * 7 + [q_torso]
+        self.publisher_joint_commands.publish(velocity_msg_right)
+        rospy.sleep(1)
+        velocity_msg_right.data = [0.0] * 8
+        self.publisher_joint_commands.publish(velocity_msg_right)
         rospy.sleep(2)
 
 
     def main(self):
 
-        input("start?")
 
+        input(f"\n{'-'*50}\nLocate your self in the simulator. Once done, press enter to continue.")
+
+        available_ids = {}
+        print("\nThe grapes reachable from this position are the following:")
+        for g_id, g_pos in zip(self.grapes_idx, self.grapes_pos):
+            dist = np.linalg.norm(g_pos)
+            if dist<1.5:
+                print(f' - {g_id} at distance {round(dist, 3)}m from the basefootprint')
+                available_ids[g_id] = g_pos
+
+        goal_id = int(input("Input the id of the grape to collect?: "))
+        while not goal_id in available_ids:
+            goal_id = int(input("id not valid. Please enter a valid id (from the list): "))
+
+        goal_pos = available_ids[goal_id]
+        self.goal = torch.tensor(goal_pos).float().unsqueeze(0).to(self.device)
         ## ----------------- SETUP -----------------
-        # get grapes position and index
-        #self.grapes_pos, self.grapes_idx, self.removed_grapes = self.register_grapes()
-
-        # get closest grape to be the goal
-        g_mean = np.array([[ 0.3065, -0.2552,  1.5596]]) #np.array([[0.5, -0.3, 1.3]])
-        closest_grape_idx = np.argmin(np.linalg.norm(self.grapes_pos - g_mean, axis=-1))
-        self.goal = torch.from_numpy(self.grapes_pos[closest_grape_idx:closest_grape_idx + 1]).float().to(self.agent.device)
-        goal_id = self.grapes_idx[closest_grape_idx]
 
         #init current variables and observation stack   
         joints_msg = rospy.wait_for_message('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, timeout=None)
@@ -122,17 +145,10 @@ class ImitationNode:
             'joint_vel': deque(list(self.curr_joints_vel) * self.n_frames, maxlen=self.n_frames),
         }
         rospy.sleep(2)
-        
-        # give a random initial position if necessair
-        if random_init:
-            self.pos = self.pos + np.concatenate([np.random.uniform(low=-0.3, high=0.3, size=1),
-                                                  np.random.uniform(low=0, high=0.3, size=1),
-                                                  np.random.uniform(low=0, high=0.3, size=1)])
-       
-       
+
         ## ----------------- SIM LOOP -----------------
 
-        rospy.loginfo(f"Starting ... aiming to {self.goal} of id {goal_id}")
+        rospy.loginfo(f"Starting ... agent {'stable' if self.stable else ''} aiming to {goal_pos} of id {goal_id}")
         sim_step = 0
         ee_pos_msg = ExternalReference()
 
@@ -144,6 +160,9 @@ class ImitationNode:
             obs_tsr = process_obs(obs_dict).to(self.agent.device)
             action = self.agent.select_action(obs_tsr, self.goal).detach().cpu().squeeze().numpy()
             rec_pos, rec_or = self.get_transform(target_frame='base_footprint', source_frame=f'inner_finger_1_right_link')
+            if self.recording:
+                self.traj_buffer.vr_commands['value'].append(list(action))
+                self.traj_buffer.vr_commands['time'].append(rospy.get_time())
 
             # publish a new commanded pos
             if not (random_init and sim_step < 10):
@@ -152,15 +171,8 @@ class ImitationNode:
             ee_pos_msg.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
             self.publisher_ee_commands.publish(ee_pos_msg)
 
-
             #remove a grape if necessary
             self.grape_revove_check(rec_pos)
-
-            if self.recording:
-                rec_joints_pos = copy.deepcopy(self.curr_joints_pos)
-                rec_joints_vel = copy.deepcopy(self.curr_joints_vel)
-                rec_pos = np.expand_dims(np.array(rec_pos), 0)
-                rec_or = np.expand_dims(np.array(rec_or), 0)
 
             # wait for the velocity command and forward to the simulator
             joint_vel_ik_right = rospy.wait_for_message('/arm_right_forward_velocity_controller/command', Float64MultiArray, timeout=None)
@@ -170,19 +182,10 @@ class ImitationNode:
             self.publisher_joint_commands.publish(self.velocity_msg_right)
 
             # rec variables
-            if self.recording > 0.0:
-                self.traj_data.store_data(
-                    (
-                        rec_joints_pos,
-                        rec_joints_vel,
-                        rec_pos,
-                        rec_or,
-                        copy.deepcopy(np.expand_dims(np.array(self.velocity_msg_right.data), 0)),
-                        None,
-                        self.grapes_pos
-                    )
-                )
-
+            if self.recording and (goal_id in self.removed_grapes or sim_step == 1000):
+                self.traj_buffer.grapes_positions.append([self.goal])
+                self.traj_buffer.show_current_status()
+                self.traj_buffer.save_trajectory(f'{self.task}{"_stable" if self.stable else ""}_{self.rate}.pkl')
             sim_step += 1
             self.control_loop_rate.sleep()
 
@@ -191,12 +194,22 @@ class ImitationNode:
     ## ----------------- CALLBACKS -----------------
 
     def callback_joint_state(self, joints_msg):
+        t = rospy.get_time()
+        joints_pos = [0.] * len(self.names_right)
+        joints_vel = [0.] * len(self.names_right)
         for name in self.names_right:
             index_in_joint_state = joints_msg.name.index(name)
             index_in_msg = self.names_right.index(name)
-            self.curr_joints_pos[0, index_in_msg] = joints_msg.position[index_in_joint_state]
-            self.curr_joints_vel[0, index_in_msg] = joints_msg.velocity[index_in_joint_state]
-    
+            joints_pos[index_in_msg] = joints_msg.position[index_in_joint_state]
+            joints_vel[index_in_msg] = joints_msg.velocity[index_in_joint_state]
+
+        if self.recording:
+            self.traj_buffer.joint_positions['value'].append(joints_pos)
+            self.traj_buffer.joint_velocities['value'].append(joints_vel)
+            self.traj_buffer.joint_positions['time'].append(t)
+            self.traj_buffer.joint_velocities['time'].append(t)
+
+
     def callback_grapes(self, grapes_data):
         grapes_pos, grapes_idx = [], []
         for box in grapes_data.boxes:
@@ -205,6 +218,16 @@ class ImitationNode:
             grapes_pos.append(g_pos)
         self.grapes_pos = np.array(grapes_pos)
         self.grapes_idx = grapes_idx
+
+    def callback_end_effector(self, pose_msg):
+        t = pose_msg.header.stamp.secs + pose_msg.header.stamp.nsecs/(10**9)
+        self.ee_pos = [pose_msg.pose.position.x, pose_msg.pose.position.y, pose_msg.pose.position.z]
+        self.ee_rot = [pose_msg.pose.orientation.x, pose_msg.pose.orientation.y, pose_msg.pose.orientation.z, pose_msg.pose.orientation.w]
+        if self.recording:
+            self.traj_buffer.cartesian_positions['value'].append(self.ee_pos)
+            self.traj_buffer.cartesian_orientations['value'].append(self.ee_rot)
+            self.traj_buffer.cartesian_positions['time'].append(t)
+            self.traj_buffer.cartesian_orientations['time'].append(t)
 
 
     ## ----------------- METHODS -----------------
@@ -240,9 +263,17 @@ class ImitationNode:
         for box in grapes_data.boxes:
             grapes_idx.append(box.index)
             g_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{box.index}')
-            self.grapes_pos.append(g_pos)
+            grapes_pos.append(g_pos)
         grapes_pos = np.array(grapes_pos)
         return grapes_pos, grapes_idx, []
+
+
+def process_obs(obs_dict):
+    joint_pos = torch.from_numpy(np.expand_dims(np.stack(obs_dict['joint_pos'], axis=0).flatten(), 0)).float()
+    joint_vel = torch.from_numpy(np.expand_dims(np.stack(obs_dict['joint_vel'], axis=0).flatten(), 0)).float()
+    obs_tsr = torch.cat([joint_pos, joint_vel], dim=1)
+    return joint_pos #obs_tsr
+
 
 
 if __name__ == "__main__":
@@ -251,69 +282,3 @@ if __name__ == "__main__":
         node.main()
     except rospy.ROSInterruptException:
         pass
-
-
-
-
-
-
-
-
-        # joints_msg = rospy.wait_for_message('/canopies_simulator/arm_right_controller/state', JointTrajectoryControllerState, timeout=None)
-        # self.curr_joints_pos = np.expand_dims(np.array(joints_msg.actual.positions), 0)
-        # self.curr_joints_vel = np.expand_dims(np.array(joints_msg.actual.velocities), 0)
-        # self.velocity_msg_right = Float64MultiArray()
-        # self.velocity_msg_right.data = [0.0] * 7
-        # self.goal = np.expand_dims(np.array([4.08305303e-01, -1.07297375e-05, 1.27501961e+00]), 0)  #####TODO
-        # self.pos = np.zeros(3)
-        # self.k_v = rospy.get_param('/gains/k_v')
-
-        # # initialize the agent
-        # self.agent = Agent(input_size=56, hidden_size1=128, hidden_size2=128, output_size=3, stable=True, device='cuda' if torch.cuda.is_available() else 'cpu')
-        # encoder_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/model_encode.pth'
-        # policy_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/policy_grasp_stable.pth'
-        # mdn_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/mdn_grasp_stable.pth'
-        # self.agent.load_model(policy_file, mdn_file)
-
-        # input_dim = rospy.get_param('/agent_hp/input_dim')
-        # output_dim = rospy.get_param('/agent_hp/output_dim')
-        # hidden_dim = rospy.get_param('/agent_hp/hidden_dim')
-        # self.agent = Agent(input_size=input_dim, hidden_size1=hidden_dim, hidden_size2=hidden_dim, output_size=output_dim,
-        #                     stable=self.stable_agent, device='cuda' if torch.cuda.is_available() else 'cpu')
-        # model2load = f'model_{task}_stable.pth' if self.stable_agent else f'model_{task}.pth'
-        # self.agent.load_model(os.path.join(self.load_dir,model2load))
-        # if self.stable_agent:
-        #     # need to load the params for the encoder and to init the KDE
-        #     # self.agent.encoder.load_model(os.path.join(self.load_dir,f'model_encode.pth'))
-        #     self.agent.encoder.load_model(encoder_file)
-        #     n_freq = int(rospy.get_param('rates/recording') / rate)
-        #     dataset = load_trajectories(
-        #         data_path=os.path.join(self.data_dir, task),
-        #         n_frames=self.n_frames,
-        #         n_freq=n_freq
-        #     )
-        #     # z = self.agent.init_KDE(dataset.states)
-        # self.agent.to_device()
-
-
-
-    # def callback_grapes(self, grapes_data):
-    #
-    #     self.grapes = []
-    #     self.grapes_idx = []
-    #     ee_pos_1, _ = self.get_transform(target_frame='base_footprint', source_frame=f'fingertip_1_right_link')
-    #     ee_pos_2, _ = self.get_transform(target_frame='base_footprint', source_frame=f'fingertip_2_right_link')
-    #     ee_pos = (np.array(ee_pos_1) + np.array(ee_pos_2)) / 2
-    #     for box in grapes_data.boxes:
-    #         i = box.index
-    #         g_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{i}')
-    #         self.grapes.append(g_pos)
-    #         self.grapes_idx.append(box.index)
-    #         dist = np.linalg.norm(np.array(ee_pos) - np.array(g_pos))
-    #         if dist < 0.1:  # 0.2:
-    #             self.simulator_remove_grape_bunch(int(box.index))
-    #             #     self.update_goal(i)
-    #             if self.recording: self.traj_data.save_trajectory(self.saving_name + str(round(datetime.datetime.now().timestamp())))
-    #         # #update bounches to be seen
-    #         # self.bunch_poses[i] = np.array(g_pos)
-    #     self.grapes = np.array(self.grapes)
