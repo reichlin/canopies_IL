@@ -144,19 +144,27 @@ def load_data_new(data_path, n_frames=1, frequency:int=50):
         d_pos = pos[1:] - pos[:-1]
 
         #change the frequency and augment the dataset
-        j_stack, j_dot_stack, pos_stack, d_pos_stack = [],[],[],[]
+        j_stack, j_next_stack, j_dot_stack, j_dot_next_stack, pos_stack, d_pos_stack = [],[],[],[],[],[]
+
         for i in range(f):
-            j_i = J[i::f]
-            j_dot_i = J_dot[i::f]
+            J_i = J[i::f]
+            J_dot_i = J_dot[i::f]
             pos_i = pos[i::f]
             d_pos_i = pos_i[1:] - pos_i[:-1]
 
-            j_stack.append(j_i[:-1])
-            j_dot_stack.append(j_dot_i[:-1])
+            j_stack.append(J_i[:-1])
+            j_next_stack.append(J_i[1:])
+            j_dot_stack.append(J_dot_i[:-1])
+            j_dot_next_stack.append(J_dot_i[1:])
             pos_stack.append(pos_i[:-1])
             d_pos_stack.append(d_pos_i)
+
         J = np.concatenate(j_stack, 0)
+        J_next = np.concatenate(j_next_stack, 0)
+
         J_dot = np.concatenate(j_dot_stack, 0)
+        J_dot_next = np.concatenate(j_dot_next_stack, 0)
+
         pos = np.concatenate(pos_stack, 0)
         d_pos = np.concatenate(d_pos_stack, 0)
 
@@ -164,37 +172,21 @@ def load_data_new(data_path, n_frames=1, frequency:int=50):
         grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
         goal = np.tile(obj_poses[grape_idx], (pos.shape[0], 1))
 
-        return (torch.from_numpy(J).float(),
+        '''return (torch.from_numpy(J).float(),
                 torch.from_numpy(d_pos).float(),
                 torch.from_numpy(goal).float(),
-                torch.from_numpy(pos).float())
-        '''J = J[::f]
-        J_dot = J_dot[::f]
-        pos = pos[::f]'''
+                torch.from_numpy(J_next).float(),
+                torch.from_numpy(pos).float())'''
 
-        '''plt.scatter(pos[:, 0], pos[:, 2], color='red', s=1, zorder=2)
-        plt.title(file_name)
-        plt.show()'''
 
-        # get the actions
-
-        # get (stack) the configurations
-        stack_J, stack_J_dot = [], []
-        for i in range(n_frames):
-            idx = np.concatenate((np.array([0] * i, dtype=int), np.arange(J.shape[0] - i)))
-            stack_J.append(J[idx])
-            stack_J_dot.append(J_dot[idx])
-        stack_J = np.concatenate(stack_J, -1)
-        stack_J_dot = np.concatenate(stack_J_dot, -1)
-
-        state_stack = stack_J
-        #state_stack = np.concatenate((stack_J, stack_J_dot), -1)
+        state = np.concatenate((J, J_dot), -1)
+        state_next = np.concatenate((J_next, J_dot_next), -1)
 
         # append the data
-        states.append(state_stack)
+        states.append(state)
         goals.append(goal)
         actions.append(d_pos)
-        next_states.append(state_stack)
+        next_states.append(state_next)
         positions.append(pos)
 
     states = torch.from_numpy(np.concatenate(states, 0)).float()
@@ -247,14 +239,6 @@ def fit_spline(pos):
     all_idx = np.arange(0, t, 1)
     spline = interp1d(idx, anchor_points, kind='cubic', fill_value="extrapolate", axis=0)
     pos_ = spline(all_idx)
-
-    '''plt.figure(figsize=(10, 6))
-    plt.scatter(pos_[idx, 0], pos_[idx, 2], color='red', s=1, zorder=2)
-    plt.scatter(pos[idx, 0], pos[idx, 2], color='orange', s=10, zorder=1)
-    plt.title('missmatch')
-    plt.grid(True)  # Add grid to the plot
-    plt.show()'''
-
     return pos_, all_idx
 
 def get_meaningful_pos(pos):
@@ -287,21 +271,8 @@ if __name__ == '__main__':
 
     task='grasping'
 
-    '''data, positions = load_data_new(
+    data, positions = load_data_new(
         data_path=f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
         n_frames=1,
         frequency=10
-    )'''
-
-    states, actions, goals, positions = load_data_new(
-        data_path=f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
-        n_frames=1,
-        frequency=50
     )
-    plt.scatter(actions[:, 0], actions[:, 2], color='red', s=1, zorder=2)
-    plt.title('actions')
-    plt.show()
-
-    plt.scatter(positions[:, 0], positions[:, 2], color='red', s=1, zorder=2)
-    plt.title('positions')
-    plt.show()
