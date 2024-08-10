@@ -6,9 +6,11 @@ import numpy as np
 import yaml
 from argparse import Namespace
 import os
-from scipy.interpolate import interp1d, splrep, splev
+import torch.nn.functional as F
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import pickle
+from sklearn.preprocessing import normalize
 
 def get_datafiles(data_path, ends_with='.npz'):
 
@@ -22,21 +24,68 @@ def get_datafiles(data_path, ends_with='.npz'):
 
 class MLP(nn.Module):
 
-    def __init__(self, input_size, output_size):
+    def __init__(self, input_size, output_size, hidden:int=32):
         super(MLP, self).__init__()
-        hidden = 128
         self.f = nn.Sequential(nn.Linear(input_size, hidden),
                                nn.ReLU(),
                                nn.Linear(hidden, hidden),
                                nn.ReLU(),
-                               nn.Linear(hidden, hidden),
-                               nn.ReLU(),
+                               #nn.Linear(hidden, hidden),
+                               #nn.ReLU(),
                                nn.Linear(hidden, output_size))
 
     def forward(self, x, g=None):
         if g is not None:
             return self.f(torch.cat([x, g], -1))
         return self.f(x)
+
+    def save_model(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        self.load_state_dict(torch.load(path))
+
+class MLPDual(nn.Module):
+
+    def __init__(self, input_size, output_size:tuple, hidden:int = 64):
+        super(MLPDual, self).__init__()
+        self.f = nn.Sequential(nn.Linear(input_size, hidden),
+                               nn.BatchNorm1d(hidden),
+                               nn.ReLU(),
+                               #nn.Dropout(0.2),
+                               nn.Linear(hidden, hidden),
+                               nn.BatchNorm1d(hidden),
+                               nn.ReLU(),
+                               #nn.Dropout(0.2),
+                               nn.Linear(hidden, hidden),
+                               nn.BatchNorm1d(hidden),
+                               nn.ReLU(),
+                               #nn.Dropout(0.2)
+                               )
+        self.head1 = nn.Sequential(nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, output_size[0])
+                                   )
+
+        self.head2 = nn.Sequential(nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, output_size[1])
+                                   )
+
+    def forward(self, x, g):
+        h = self.f(torch.cat([x, g], -1))
+        return torch.cat([self.head1(h), F.normalize(self.head2(h), dim=-1)], dim=-1)
+
+    def save_model(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load_model(self, path):
+        self.load_state_dict(torch.load(path))
+
 
 
 def load_hyperparameters(config_path):
@@ -45,83 +94,18 @@ def load_hyperparameters(config_path):
     return Namespace(**hyperparameters)
 
 
-def load_data(data_path, n_frames=1):
-    data_files = get_datafiles(data_path)
+def load_data_representation(data_path, frequency=10, j_only=False, single_traj=False):
 
-    print(f'Loading {len(data_files)} trajectory files.')
-
-    # Initialize lists to store inputs and labels from all files
-    states, goals, actions_bc, actions_eq, next_states, positions = [], [], [], [], [], []
-
-    # Load data from each .npz file
-    for file_name in data_files:
-
-        #get the dataset
-        file_path = os.path.join(data_path, file_name)
-        dataset = np.load(file_path,allow_pickle=True)
-
-        # process the data
-        ee_pos = dataset['ee_pos']
-        ee_pos_spline, _ = fit_spline(ee_pos)
-
-        #get the action to train behavioral cloning
-        ee_pos, idx = get_meaningful_pos(ee_pos)
-        idx_next = np.array(idx) + 1
-        dee_pos_bc = ee_pos_spline[idx_next] - ee_pos
-        dee_pos_eq = ee_pos[1:] - ee_pos[:-1]
-
-        obj_poses = dataset['obj_poses'][idx]
-        J = dataset['joints_pos'][idx]
-        J_dot = dataset['joints_vel'][idx]
-        a = dataset['vr_act'][idx]
-        grape_idx = np.argmin(np.linalg.norm(obj_poses[-1] - ee_pos[-1], axis=1))
-        goal = np.tile(obj_poses[-1, grape_idx], (ee_pos.shape[0], 1))
-
-        # stack the configurations
-        stack_J, stack_J_dot = [], []
-        for i in range(n_frames):
-            idx = np.concatenate((np.array([0]*i, dtype=int), np.arange(J.shape[0]-i)))
-            stack_J.append(J[idx])
-            stack_J_dot.append(J_dot[idx])
-        stack_J = np.concatenate(stack_J, -1)
-        stack_J_dot = np.concatenate(stack_J_dot, -1)
-
-        # append the data
-        states.append(np.concatenate((stack_J, stack_J_dot), -1)[:-1])
-        goals.append(goal[:-1])
-        actions_bc.append(dee_pos_bc[:-1])
-        actions_eq.append(dee_pos_eq)
-        next_states.append(np.concatenate((stack_J, stack_J_dot), -1)[1:])
-        positions.append(ee_pos)
-
-    states = torch.from_numpy(np.concatenate(states, 0)).float()
-    goals = torch.from_numpy(np.concatenate(goals, 0)).float()
-    actions_bc = torch.from_numpy(np.concatenate(actions_bc, 0)).float()
-    actions_eq = torch.from_numpy(np.concatenate(actions_eq, 0)).float()
-    next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
-    positions = torch.from_numpy(np.concatenate(positions, 0)).float()
-
-    return (states, goals, actions_bc, actions_eq, next_states), positions
-
-
-cmap = {0: 'k', 1: 'b', 2: 'y', 3: 'g', 4: 'r'}
-
-
-def load_data_new(data_path, n_frames=1, frequency:int=50):
-
-    original_frequency=50
-    f = int(original_frequency/frequency)
-    if not f%1.==0.:
-        raise ValueError(f"{frequency} Hz is not a multiple of the original frequency ({original_frequency} Hz).")
-
+    if not 50/frequency%1==0:
+        raise ValueError(f"Frequency must be a dividend of 50, not {frequency}.")
+    f = int(50/frequency)
 
     data_files = get_datafiles(data_path, '.pkl')
 
     print(f'Loading {len(data_files)} trajectory files.')
-    #    'joint_positions', 'joint_velocities', 'cartesian_positions', 'vr_commands', 'grapes_positions'
 
     # Initialize lists to store inputs and labels from all files
-    states, goals, actions, next_states, positions = [], [], [], [], []
+    states, goals, actions, next_states,positions, times = [], [], [], [], [], []
 
     # Load data from each .npz file
     for file_name in data_files:
@@ -131,74 +115,250 @@ def load_data_new(data_path, n_frames=1, frequency:int=50):
         with open(file_path, 'rb') as file:
             dataset = pickle.load(file)
 
-        # process the data
+        # get the data while
         ee_pos = np.array(dataset['cartesian_positions']['value'])
         ee_time = dataset['cartesian_positions']['time']
-        J = np.array(dataset['joint_positions']['value'])
-        J_dot = np.array(dataset['joint_velocities']['value'])
+        J_array = np.array(dataset['joint_positions']['value'])
+        J_dot_array = np.array(dataset['joint_velocities']['value'])
         J_time = np.array(dataset['joint_velocities']['time'])
         obj_poses = np.array(dataset['grapes_positions'])
-        acts = np.array(dataset['vr_commands']['value'])
-        ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
-        pos = ee_spline(J_time)
-        d_pos = pos[1:] - pos[:-1]
-
-        #change the frequency and augment the dataset
-        j_stack, j_next_stack, j_dot_stack, j_dot_next_stack, pos_stack, d_pos_stack = [],[],[],[],[],[]
 
         for i in range(f):
-            J_i = J[i::f]
-            J_dot_i = J_dot[i::f]
-            pos_i = pos[i::f]
-            d_pos_i = pos_i[1:] - pos_i[:-1]
+            # downsample with the frequency
+            J_array_i = J_array[i::f]
+            J_dot_array_i = J_dot_array[i::f]
+            J_time_i = J_time[i::f]
 
-            j_stack.append(J_i[:-1])
-            j_next_stack.append(J_i[1:])
-            j_dot_stack.append(J_dot_i[:-1])
-            j_dot_next_stack.append(J_dot_i[1:])
-            pos_stack.append(pos_i[:-1])
-            d_pos_stack.append(d_pos_i)
+            # get the states and the timesteps
+            J = J_array_i[:-1]
+            J_next = J_array_i[1:]
+            J_dot = J_dot_array_i[:-1]
+            J_dot_next = J_dot_array_i[1:]
+            timesteps = J_time_i[:-1]
+            timesteps_next = J_time_i[1:]
 
-        J = np.concatenate(j_stack, 0)
-        J_next = np.concatenate(j_next_stack, 0)
+            state = J if j_only else np.concatenate((J, J_dot), -1)
+            state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
 
-        J_dot = np.concatenate(j_dot_stack, 0)
-        J_dot_next = np.concatenate(j_dot_next_stack, 0)
+            # get the grapes positions
+            grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
+            goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
 
-        pos = np.concatenate(pos_stack, 0)
-        d_pos = np.concatenate(d_pos_stack, 0)
+            #SPLINING AND SAMPLING
+            ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
+            act = ee_spline(timesteps_next) - ee_spline(timesteps)
+            p = ee_spline(timesteps)
 
-        #get the grapes positions
+            # append the data
+            states.append(state)
+            goals.append(goal)
+            actions.append(act)
+            next_states.append(state_next)
+            positions.append(p)
+
+    if single_traj:
+        return states, goals, actions, next_states, positions
+    else:
+        states = torch.from_numpy(np.concatenate(states, 0)).float()
+        goals = torch.from_numpy(np.concatenate(goals, 0)).float()
+        actions = torch.from_numpy(np.concatenate(actions, 0)).float()
+        next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
+        positions = torch.from_numpy(np.concatenate(positions, 0)).float()
+
+        return states, goals, actions, next_states, positions
+
+
+
+
+
+def load_data_new(data_path, j_only=True, convolving=True, single_traj=False):
+
+    data_files = get_datafiles(data_path, '.pkl')
+    print(f'Loading {len(data_files)} trajectory files.')
+
+    states, goals, actions, next_states = [], [], [], []
+
+    for file_name in data_files:
+
+        #get the dataset
+        file_path = os.path.join(data_path, file_name)
+        with open(file_path, 'rb') as file:
+            dataset = pickle.load(file)
+
+        # get the data
+        ee_pos = np.array(dataset['cartesian_positions']['value'])
+        J_array = np.array(dataset['joint_positions']['value'])
+        J_dot_array = np.array(dataset['joint_velocities']['value'])
+        J_time = np.array(dataset['joint_velocities']['time'])
+        obj_poses = np.array(dataset['grapes_positions'])
+        target_pos_array = np.array(dataset['target_positions']['value'])
+        target_pos_time = np.array(dataset['target_positions']['time'])
+        target_rot_array = np.array(dataset['target_orientations']['value'])
+        target_rot_time = np.array(dataset['target_orientations']['time'])
+
+
+        # get the states
+        J = J_array[:-1]
+        J_next = J_array[1:]
+        J_dot = J_dot_array[:-1]
+        J_dot_next = J_dot_array[1:]
+        timesteps = J_time[:-1]
+        state = J if j_only else np.concatenate((J, J_dot), -1)
+        state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
+
+        # get the grapes positions
         grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
-        goal = np.tile(obj_poses[grape_idx], (pos.shape[0], 1))
+        goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
 
-        '''return (torch.from_numpy(J).float(),
-                torch.from_numpy(d_pos).float(),
-                torch.from_numpy(goal).float(),
-                torch.from_numpy(J_next).float(),
-                torch.from_numpy(pos).float())'''
+        #SPLINING AND SAMPLING
+        target_pos_spline = interp1d(target_pos_time, target_pos_array, kind='cubic', fill_value="extrapolate", axis=0)
+        d_act_pos = target_pos_spline(J_time[1:]) - target_pos_spline(timesteps)
 
+        target_rot_spline = interp1d(target_rot_time, target_rot_array, kind='cubic', fill_value="extrapolate", axis=0)
+        act_rot = normalize(target_rot_spline(timesteps), axis=1)
 
-        state = np.concatenate((J, J_dot), -1)
-        state_next = np.concatenate((J_next, J_dot_next), -1)
+        #CONVOLVING
+        if convolving:
+            d_act_pos, idx = convolve(d_act_pos)
+            state = state[idx]
+            state_next = state_next[idx]
+            goal = goal[idx]
+            act_rot = act_rot[idx]
+            timesteps = timesteps[idx]
+
+        act = np.concatenate((d_act_pos, act_rot), -1)
+
 
         # append the data
         states.append(state)
         goals.append(goal)
-        actions.append(d_pos)
+        actions.append(act)
+        next_states.append(state_next)
+
+        '''fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
+
+        ax0.scatter(act[:, 0], act[:, 1], s=1, zorder=1, color='red')
+        ax1.scatter(act[:, 0], act[:, 1], s=1, zorder=1, color='red')
+        ax2.scatter(act[:, 1], act[:, 2], s=1, zorder=1, color='red')
+        plt.title(file_name)
+        plt.show()'''
+
+    if single_traj:
+        return states, goals, actions, next_states
+    else:
+        states = torch.from_numpy(np.concatenate(states, 0)).float()
+        goals = torch.from_numpy(np.concatenate(goals, 0)).float()
+        actions = torch.from_numpy(np.concatenate(actions, 0)).float()
+        next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
+        return states, goals, actions, next_states
+
+
+
+def load_data(data_path, j_only=True, convolving=True, single_traj=False):
+
+    data_files = get_datafiles(data_path, '.pkl')
+
+    print(f'Loading {len(data_files)} trajectory files.')
+
+    # Initialize lists to store inputs and labels from all files
+    states, goals, actions, next_states, positions = [], [], [], [], []
+
+    cnt = 0
+    # Load data from each .npz file
+    for file_name in data_files:
+
+        #get the dataset
+        file_path = os.path.join(data_path, file_name)
+        with open(file_path, 'rb') as file:
+            dataset = pickle.load(file)
+
+        # get the data
+        ee_pos = np.array(dataset['cartesian_positions']['value'])
+        ee_time = dataset['cartesian_positions']['time']
+        J_array = np.array(dataset['joint_positions']['value'])
+        J_dot_array = np.array(dataset['joint_velocities']['value'])
+        J_time = np.array(dataset['joint_velocities']['time'])
+        obj_poses = np.array(dataset['grapes_positions'])
+        target_pos_array = np.array(dataset['target_positions']['value'])
+        target_pos_time = np.array(dataset['target_positions']['time'])
+        target_rot_array = np.array(dataset['target_orientations']['value'])
+        target_rot_time = np.array(dataset['target_orientations']['time'])
+
+        # get the states
+        J = J_array[:-1]
+        J_next = J_array[1:]
+        J_dot = J_dot_array[:-1]
+        J_dot_next = J_dot_array[1:]
+        timesteps = J_time[:-1]
+
+        state = J if j_only else np.concatenate((J, J_dot), -1)
+        state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
+
+        # get the grapes positions
+        grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
+        goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
+
+        #offset_corrections!!!
+        offset = goal[0, 2] - ee_pos[0, 2]
+        target_pos_array[:,2] += 0.547888700559957 - offset
+
+        #SPLINING AND SAMPLING
+        target_pos_spline = interp1d(target_pos_time, target_pos_array, kind='cubic', fill_value="extrapolate", axis=0)
+        act_pos = target_pos_spline(timesteps)
+
+        target_rot_spline = interp1d(target_rot_time, target_rot_array, kind='cubic', fill_value="extrapolate", axis=0)
+        act_rot = normalize(target_rot_spline(timesteps), axis=1)
+        act = np.concatenate((act_pos, act_rot), -1)
+
+        ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
+        pos = ee_spline(timesteps)
+
+
+        '''# --------------------------------------------------------
+        fig,axs = plt.subplots(2,1)
+        axs[0].scatter(timesteps, act_pos[:, 0],s=1,label='x')
+        axs[0].scatter(timesteps, act_pos[:, 1],s=1, label='y')
+        #axs[0].scatter(timesteps, act_pos[:, 2],s=1, label='z')
+        axs[0].set_title(f'positions - {file_name}')
+        axs[0].legend()
+
+        axs[1].scatter(timesteps, act_rot[:, 0],s=1,label='x')
+        axs[1].scatter(timesteps, act_rot[:, 1],s=1, label='y')
+        axs[1].scatter(timesteps, act_rot[:, 2],s=1, label='z')
+        axs[1].scatter(timesteps, act_rot[:, 3],s=1, label='w')
+        axs[1].set_title(f'rotations - {file_name}')
+        axs[1].legend()
+
+        plt.show()'''
+        # --------------------------------------------------------
+
+        #CONVOLVING
+        '''if convolving:
+            act_pos, idx = convolve(act_pos)
+            state = state[idx]
+            state_next = state_next[idx]
+            goal = goal[idx]
+            pos = pos[idx]
+            timesteps = timesteps[idx]'''
+
+        # append the data
+        states.append(state)
+        goals.append(goal)
+        actions.append(act)
         next_states.append(state_next)
         positions.append(pos)
 
-    states = torch.from_numpy(np.concatenate(states, 0)).float()
-    goals = torch.from_numpy(np.concatenate(goals, 0)).float()
-    actions = torch.from_numpy(np.concatenate(actions, 0)).float()
-    next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
-    positions = torch.from_numpy(np.concatenate(positions, 0)).float()
+    plt.show()
 
-    return (states, goals, actions, next_states), positions
-
-
-
+    if single_traj:
+        return states, goals, actions, next_states, positions
+    else:
+        states = torch.from_numpy(np.concatenate(states, 0)).float()
+        goals = torch.from_numpy(np.concatenate(goals, 0)).float()
+        actions = torch.from_numpy(np.concatenate(actions, 0)).float()
+        next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
+        positions = torch.from_numpy(np.concatenate(positions, 0)).float()
+        return states, goals, actions, next_states, positions
 
 
 def get_config(yaml_file):
@@ -224,12 +384,12 @@ def get_config(yaml_file):
     return config
 
 
-def convolve(pos):
-    N = 15
-    t = pos.shape[0]
-    pos_ = np.stack([np.convolve(pos[:, i], np.array([1 / N] * N), 'valid') for i in range(pos.shape[1])], axis=1)
+def convolve(x):
+    N = 15 #15
+    t = x.shape[0]
+    x_ = np.stack([np.convolve(x[:, i], np.array([1 / N] * N), 'valid') for i in range(x.shape[1])], axis=1)
     idx = np.arange(int(N / 2), t - int(N / 2), 1)
-    return pos_, idx
+    return x_, idx
 
 def fit_spline(pos):
     t = pos.shape[0]
@@ -241,21 +401,22 @@ def fit_spline(pos):
     pos_ = spline(all_idx)
     return pos_, all_idx
 
-def get_meaningful_pos(pos):
-    delta = pos[1:] - pos[:-1]
-    idx = np.unique(np.nonzero(delta)[0])
-    pos_ = pos[idx]
-    return pos_, idx
+def filter(x, th=0.01):
+    pd = np.mean(abs(x), axis=1)
+    x[pd < th] = 0.
+    idx = np.unique(np.nonzero(x)[0])
+    return x[idx], idx
 
-
-
-
-
-
-
-
-
-
+def integrate(X, T):
+    x_ = np.zeros(X.shape[-1])
+    t_ = T[0]
+    y = [np.zeros(X.shape[-1])]
+    for x, t in zip(X[:-1],T[1:]):
+        dt = t - t_
+        x_ += x*dt
+        y.append(copy.deepcopy(x_))
+        t_ = copy.deepcopy(t)
+    return np.stack(y)
 
 
 
@@ -265,14 +426,40 @@ if __name__ == '__main__':
     import sys
     module_path = '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning'
     sys.path.append(module_path)
-
-    from src.utils_rl import Agent
-
-
     task='grasping'
 
-    data, positions = load_data_new(
-        data_path=f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
-        n_frames=1,
-        frequency=10
+    '''states, goals, actions, next_states, positions, d_positions = load_data_representation(
+        f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
+        frequency=1
     )
+    '''
+    states, goals, actions, next_states, positions = load_data_new(
+        '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/grasp_best',
+        #f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
+        convolving=True,
+        single_traj=True
+    )
+    from model import Model
+
+    agent = Model(
+        input_size=7,
+        goal_size=3,
+        action_size=(3, 4),
+        N_gaussians=25,
+        device='cpu'
+    )
+    agent.policy.load_model('/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/grasping_J_only_50hz_grasp_best/model_policy.pth')
+
+    '''for i in range(len(goals)):
+        g = np.expand_dims(goals[i][0],0)
+        g_ = g+np.array([[0.01,-0.1,0.]])
+
+        print('\n', g)
+        #print(a.detach().cpu().tolist(), ' from ', g)
+        #print(a_.detach().cpu().tolist(), ' from ', g_)'''
+
+    dio = 0
+
+
+
+

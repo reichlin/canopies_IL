@@ -94,38 +94,18 @@ class ImitationNode:
         self.random_start = True
 
     def main(self):
-        ## ====================================== SETUP =====================================
-        data = np.load(
-            '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/d_act_traj.npz')
-        data_dpositions = data['d_positions']
-        data_orientations = data['orientations']
 
-        #locate the robot
         if self.random_start:
             self.random_init()
             self.reset()
             rospy.sleep(5)
         else:
             self.reset()
+        self.torso_controller(0.085)
 
-        #let the user choose the goal position
         target_pos, target_rot = np.array(self.init_pos), np.array(self.init_rot)
         goal_pos, goal_id = self.get_goal()
         self.goal = torch.tensor(goal_pos).float().unsqueeze(0).to(self.device)
-
-        #set the torso height
-        z_g = goal_pos[2]
-        z_ee = self.ee_pos[2]
-        dz_des = z_g - z_ee - 0.5378444981063648
-        input(dz_des)
-        self.torso_controller(dz_des) #0.085
-        self.send_viapoint(target_pos, target_rot)
-
-        if self.recording:
-            self.traj_buffer.target_positions['value'].append(list(target_pos))
-            self.traj_buffer.target_orientations['value'].append(list(target_rot))
-            self.traj_buffer.target_positions['time'].append(rospy.get_time())
-            self.traj_buffer.target_orientations['time'].append(rospy.get_time())
 
         ## ====================================== SIM LOOP ======================================
 
@@ -135,17 +115,12 @@ class ImitationNode:
 
         while not rospy.is_shutdown():
             obs_tsr = torch.from_numpy(self.joint_pos).float().unsqueeze(0).to(self.device)
-
-            # get the new displacement for the viapoint (position) and the new orientation
-            action = self.agent.select_action(
+            new_target = self.agent.select_action(
                 obs_tsr, self.goal,
                 torch.from_numpy(target_pos).float().unsqueeze(0).to(self.agent.device)
             ).detach().cpu().squeeze().numpy()
-
-            d_target_pos, target_rot = action[:3], action[3:]
-            target_rot = data_orientations[self.sim_step]
-            target_pos += data_dpositions[self.sim_step]
-            #target_pos += d_target_pos
+            target_pos = new_target[:3]
+            target_rot = new_target[3:]
 
             # publish a new commanded pos
             self.send_viapoint(target_pos, target_rot)
@@ -156,11 +131,8 @@ class ImitationNode:
             if self.recording:
                 self.traj_buffer.target_positions['value'].append(list(target_pos))
                 self.traj_buffer.target_orientations['value'].append(list(target_rot))
-                self.traj_buffer.command_positions['value'].append()
                 self.traj_buffer.target_positions['time'].append(rospy.get_time())
                 self.traj_buffer.target_orientations['time'].append(rospy.get_time())
-                self.traj_buffer.command_positions['time'].append(rospy.get_time())
-
 
             #remove a grape if necessary
             self.grape_revove_check(self.ee_pos)
@@ -174,6 +146,8 @@ class ImitationNode:
 
             self.sim_step += 1
             self.control_loop_rate.sleep()
+
+
 
     ## ====================================== CALLBACKS =================================================
 
@@ -197,6 +171,7 @@ class ImitationNode:
             index_in_msg = self.names_right.index(name)
             self.velocity_msg_right.data[index_in_msg] = msg_vel.data[i] * self.k_v
         self.publisher_joint_commands.publish(self.velocity_msg_right)
+
 
     def callback_grapes(self, grapes_data):
         grapes_pos, grapes_idx = [], []
@@ -297,7 +272,7 @@ class ImitationNode:
         Moves the torso joint until a specif height (considering head_2_link wrt base_frame as reference)
         """
         x_0, _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
-        e, z = 1., 0.
+        e = 1.
         while abs(e)>0.001:
             self.velocity_msg_right.data = [0.0] * 7 + [0.1 * np.sign(e)]
             rospy.sleep(0.01)
@@ -306,7 +281,7 @@ class ImitationNode:
             e = h-z
         self.velocity_msg_right.data = [0.0] * 8
         self.publisher_joint_commands.publish(self.velocity_msg_right)
-        return z
+        return x
 
     def reset(self):
         ee_pos_msg = ExternalReference()
@@ -345,7 +320,7 @@ class ImitationNode:
 
 if __name__ == "__main__":
     try:
-        node = ImitationNode()
+        node = ImitationNode(rec=True)
         node.main()
     except rospy.ROSInterruptException:
         pass

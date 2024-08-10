@@ -76,8 +76,6 @@ class TrajectoryHandler:
             return 'NEVER'
 
 
-
-
 import pickle
 
 class Buffer:
@@ -91,7 +89,9 @@ class Buffer:
         self.joint_velocities = dict(value=[], time=[])
         self.cartesian_positions = dict(value=[], time=[])
         self.cartesian_orientations = dict(value=[], time=[])
-        self.vr_commands = dict(value=[], time=[])
+        self.target_positions = dict(value=[], time=[])
+        self.target_orientations = dict(value=[], time=[])
+        self.command_positions = dict(value=[], time=[])
         self.grapes_positions = []
 
     def size(self):
@@ -103,7 +103,8 @@ class Buffer:
             joint_velocities=self.joint_velocities,
             cartesian_positions=self.cartesian_positions,
             cartesian_orientations=self.cartesian_orientations,
-            vr_commands=self.vr_commands,
+            target_positions=self.target_positions,
+            target_orientations=self.target_orientations,
             grapes_positions=self.grapes_positions
         )
         file = os.path.join(self.save_dir, name)
@@ -118,5 +119,4 @@ class Buffer:
         rospy.loginfo(f'joint velocities: {len(self.joint_velocities["value"])}')
         rospy.loginfo(f'ee positions: {len(self.cartesian_positions["value"])}')
         rospy.loginfo(f'ee orientations: {len(self.cartesian_orientations["value"])}')
-        rospy.loginfo(f'vr commands: {len(self.vr_commands["value"])}')
         rospy.loginfo(f'------------------------------------')

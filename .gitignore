@@ -5,3 +5,4 @@ behavioural_cloning/wandb
 behavioural_cloning/params
 behavioural_cloning/save
 */__pycache__/*
+notes.txt

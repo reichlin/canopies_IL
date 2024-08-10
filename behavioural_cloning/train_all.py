@@ -1,100 +1,219 @@
+import time
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import os
 import numpy as np
+import yaml
 from model import Model
-from utils import load_data, get_config, load_data_new
+from utils import load_data, load_data_representation
 from tqdm import tqdm
 from torch.utils.data import DataLoader, TensorDataset
 import wandb
 import matplotlib.pyplot as plt
+import argparse
+from torch.distributions.multivariate_normal import MultivariateNormal
+import torch.optim as optim
 
 
-def train(agent, loader):
+def train(agent, loader_IL, loader_EQUI):
     pbar = tqdm(total=config.epochs)
-    best_loss = np.inf
+    best_scores = dict(policy=np.inf, mdn=np.inf, encoder=np.inf)
+    optimizer = optim.Adam(agent.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     for epoch in range(config.epochs):
         agent.train()
-        total_loss = 0.0
-        for batch in loader:
-            s, g, a, s1 = batch
-            loss, loss_dict = agent.training_step((
+        total_loss, tot_loss_policy, tot_loss_equi, tot_loss_nll = [0.0]*4
+
+        for batch_IL, batch_EQUI in zip(loader_IL, loader_EQUI):
+            s, g, a, s1 = batch_IL
+            loss_policy, (loss_pos, loss_rot) = agent.training_step_IL((
                 s.to(agent.device),
                 g.to(agent.device),
                 a.to(agent.device),
                 s1.to(agent.device)
             ))
-            total_loss += loss
 
-        if (epoch + 1) % 100 == 0:
-            avg_loss = total_loss / len(loader)
+            '''loss_nll = agent.training_step_NLL((
+                s.to(agent.device),
+                g.to(agent.device),
+                a[:,:3].to(agent.device),
+                s1.to(agent.device)
+            ))
 
-            log_dict = {'train_loss': avg_loss, **loss_dict}
-            wandb.log(log_dict)
+            s, g, a, s1 = batch_EQUI
+            loss_equi = agent.training_step_equi((
+                s.to(agent.device),
+                g.to(agent.device),
+                a[:,:3].to(agent.device),
+                s1.to(agent.device)
+            ))'''
 
-            if avg_loss < best_loss:
-                # save best params
-                path_save = os.path.join(os.getcwd(), config.save_dir)
-                best_loss = avg_loss
-                os.makedirs(path_save, exist_ok=True)
-                agent.save_model(os.path.join(path_save, f'model_{config.task}_{hz}.pth'))
+            loss = loss_policy #+ loss_equi + loss_nll
 
-            states = data[0]
-            goals = data[1]
-            actions = data[2].numpy()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            #total_loss += loss
+            total_loss += loss_policy #+ loss_equi + loss_nll
+            tot_loss_policy += loss_policy
+            #tot_loss_equi += loss_equi
+            #tot_loss_nll += loss_nll
+
+        log_dict = dict(
+            total_loss=total_loss / len(loader_IL),
+            loss_policy=tot_loss_policy / len(loader_IL),
+            loss_equi=tot_loss_equi / len(loader_IL),
+            loss_nll=tot_loss_nll / len(loader_IL),
+            loss_target_pos=loss_pos,
+            loss_target_rot=loss_rot
+        )
+
+        wandb.log(log_dict)
+
+        #save best params
+        if (epoch + 1) % 10 == 0:
+
+            if log_dict['loss_policy'] < best_scores['policy']:
+                best_scores['policy'] = log_dict['total_loss']
+                agent.policy.save_model(os.path.join(config.save_dir, f'model_policy.pth'))
+
+            if log_dict['loss_equi'] < best_scores['encoder']:
+                best_scores['encoder'] = log_dict['loss_equi']
+                agent.encoder.save_model(os.path.join(config.save_dir, f'model_encoder.pth'))
+
+            if log_dict['loss_nll'] < best_scores['mdn']:
+                best_scores['mdn'] = log_dict['loss_nll']
+                agent.MDN.save_model(os.path.join(config.save_dir, f'model_mdn.pth'))
+
+            agent.eval()
             acts = agent.policy(
                 states.to(agent.device),
                 goals.to(agent.device)
             ).detach().cpu().numpy()
 
-            plt.scatter(acts[:, 0], acts[:, 2], s=1, color='blue', zorder=2)
-            plt.scatter(actions[:, 0], actions[:, 2], s=10, color='red', zorder=1)
-            plt.savefig(os.path.join(os.getcwd(), 'figures', f'actions.png'))
+            # Plot
+            fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
+            ax0.scatter(acts[:, 0], acts[:, 1], s=0.1, zorder=2, color='blue')
+            ax1.scatter(acts[:, 0], acts[:, 2], s=0.1, zorder=2, color='blue')
+            ax2.scatter(acts[:, 1], acts[:, 2], s=0.1, zorder=2, color='blue')
+
+            ax0.scatter(actions[:, 0], actions[:, 1], s=1, zorder=1, color='red')
+            ax1.scatter(actions[:, 0], actions[:, 2], s=1, zorder=1, color='red')
+            ax2.scatter(actions[:, 1], actions[:, 2], s=1, zorder=1, color='red')
+
+            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_positions.png'))
             plt.close()
+
+            fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
+            ax0.scatter(acts[:, 3], acts[:, 4], s=0.1, zorder=2, color='blue')
+            ax1.scatter(acts[:, 3], acts[:, 5], s=0.1, zorder=2, color='blue')
+            ax2.scatter(acts[:, 3], acts[:, 6], s=0.1, zorder=2, color='blue')
+
+            ax0.scatter(actions[:, 3], actions[:, 4], s=1, zorder=1, color='red')
+            ax1.scatter(actions[:, 3], actions[:, 5], s=1, zorder=1, color='red')
+            ax2.scatter(actions[:, 3], actions[:, 6], s=1, zorder=1, color='red')
+
+            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_orientations.png'))
+            plt.close()
+            '''
+            s = states[:1586].to(agent.device)
+            g = goals[:1586].to(agent.device)
+            z_ee, _, rho = agent(s,g)
+            z_ee = z_ee.detach().cpu().numpy()
+            rho = rho.detach().cpu()
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+            ax.scatter(z_ee[:, 0], z_ee[:, 1], z_ee[:, 2], s=10, color='red', zorder=1)
+            for i in range(rho.shape[1]):
+                rho_i = rho[-1, i, :]
+                distribution = MultivariateNormal(rho_i, torch.eye(3) * 0.001)
+                samples = distribution.rsample((1000,))
+                ax.scatter(samples[:, 0], samples[:, 1], samples[:, 2], s=10, color='blue', alpha=0.01, zorder=2)
+            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_equi_distribution.png'))'''
+
         pbar.update()
 
     pbar.close()
-    return best_loss
-
 
 def main():
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-    dataloader = DataLoader(TensorDataset(*data), batch_size=config.batch_size, shuffle=True)
+    dataloader_IL = DataLoader(TensorDataset(*data_IL), batch_size=config.batch_size, shuffle=True)
+    #dataloader_EQUI = DataLoader(TensorDataset(*data_EQUI), batch_size=config.batch_size, shuffle=True)
 
     agent = Model(
-        input_size=data[0].shape[-1],
-        goal_size=data[1].shape[-1],
-        action_size=data[2].shape[-1],
+        input_size=config.input_size,
+        goal_size=config.goal_size,
+        action_size=(3, 4),
         N_gaussians=config.N_gaussians,
         device=config.device
     )
-
-    best_score = train(agent, dataloader)
+    #best_score = train(agent, dataloader_IL, dataloader_EQUI)
+    best_score = train(agent, dataloader_IL, data_IL)
 
     print(f'Training finished with best score of {best_score}')
 
 
 if __name__ == "__main__":
-    config = get_config('config/hyperparameters.yaml')
 
-    config.wb_mode = 'online' #'offline' #'online'
-    config.wb_group = 'new_params_trials'
+    parser = argparse.ArgumentParser(description='Training Behavioural Clone')
+    parser.add_argument("-wb", "--wb_mode", type=str, default="online", choices=["online", "offline"],help="online or offline?")
+    parser.add_argument( "--wb_group", type=str, default="Null",help="Why group does the run belongs to?")
+    parser.add_argument( "-task" "--task", type=str,help="What task to perform?")
+    parser.add_argument( "-device", "--device", default='cuda' if torch.cuda.is_available() else 'cpu',
+                         type=str, choices=["cuda", "cpu"])
 
-    hz = 10
+    config = parser.parse_args()
+    #args = get_config('config/hyperparameters.yaml')
+    with open(os.path.join(os.getcwd(), 'config/hyperparameters.yaml'), "r") as f:
+        hyperparams = yaml.safe_load(f)
+    for item in hyperparams.keys():
+        if not hasattr(config, item) or (hasattr(config, item) and getattr(config, item) is None):
+            setattr(config, item, hyperparams[item])
 
-    parent_dir = os.path.dirname(os.getcwd())
-    data, ee_positions = load_data_new(
-        data_path=os.path.join(parent_dir, config.load_dir, config.task),
-        n_frames=config.n_frames,
-        frequency=hz
+    config.task = 'grasp_best'
+
+
+    for name, value in sorted(vars(config).items()):
+        print(f"{name}: {value}")
+    print(f'{"-" * 20}\n')
+
+
+    '''config.wb_mode = "online" #'offline' #'online'
+    config.wb_group = "02/08" '''
+    J_only = True
+    tag = f'J_only_50hz_{config.task}' if J_only else f'J_J_dot_50hz_{config.task}'
+    config.save_dir = os.path.join(os.getcwd(), config.save_dir, f'grasping_{tag}')
+    os.makedirs(config.save_dir, exist_ok=True)
+
+
+    ## LOAD DATASET
+    parent_dir = os.path.abspath(os.path.join(os.getcwd(), os.pardir))
+
+    # get the dataset for the equivariant representation
+    '''states, goals, actions, next_states, positions = load_data_representation(
+        data_path=os.path.join(parent_dir, f'data/{config.task}'),
+        j_only=J_only,
+        single_traj=False,
+        frequency=1
     )
+    data_EQUI = (states, goals, actions, next_states)'''
 
-    wb_run = f'{config.task}_data_spline'
+    #get the dataset for imitation learning
+    states, goals, actions, next_states, positions = load_data(
+        data_path=os.path.join(parent_dir, f'data/{config.task}'),
+        j_only=J_only,
+        convolving=True,
+        single_traj=False
+    )
+    data_IL = (states, goals, actions, next_states)
+
+    print(f'Dataset of {states.shape[0] } samples')
+
+
+    wb_run = f'{config.task}_{tag}_with_equivariance'
     wandb.init(project="Behavioural_cloning", config=config, name=wb_run,
-               mode=config.wb_mode, group=config.wb_group)
+               mode=config.wb_mode,
+               group=config.wb_group)
 
     main()
 

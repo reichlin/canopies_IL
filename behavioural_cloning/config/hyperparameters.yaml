@@ -1,14 +1,16 @@
 #data
-input_size: 14 #17
+input_size: 7 #14 #17
+goal_size: 3
 n_frames: 1
-output_size: 3
+output_size: 7 #3
 
 #training
-lr: 0.00001
+lr: 0.001
 epochs: 100000
-batch_size: 128
+batch_size: 512
 load_dir: data
 save_dir: params
 checkpoint_dir: save/checkpoints
 task: grasping
 N_gaussians: 25
+weight_decay: 0.0 #0.001

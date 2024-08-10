@@ -13,15 +13,15 @@
     <param name="agent_name" value='$(arg agent)'/>
     <!-- Launching the simulator -->
     <include file="$(find canopies_simulator)/launch/simulator.launch"/>
-    <!-- Launching the low-level controller -->
-    <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
     <!-- Launching the main loop -->
     <include file="$(find main_loop)/launch/main_loop_v2.launch"/>
-    
+    <!-- Launching the low-level controller -->
+    <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
+
+
     <!-- Running low-level commands -->
     <node pkg="imitation_learning" type="frame_listener.py" name="frame_listener" output="screen"/>
-
-    <node pkg="imitation_learning" type="imitation_commands_new.py" name="imitation_commands_node" output="screen"/>
+    <node pkg="imitation_learning" type="imitation_commands.py" name="imitation_commands_node" output="screen"/>
 
 
 </launch>

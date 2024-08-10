@@ -1,19 +1,19 @@
 arm_right_joints: ["arm_right_1_joint", "arm_right_2_joint", "arm_right_3_joint", "arm_right_4_joint", "arm_right_5_joint", "arm_right_6_joint", "arm_right_7_joint"]
 arm_left_joints: ["arm_left_1_joint", "arm_left_2_joint", "arm_left_3_joint", "arm_left_4_joint", "arm_left_5_joint", "arm_left_6_joint", "arm_left_7_joint"]
-ee_init_pos: [0.0, 0.0, 0.0]
+ee_init_pos: [0.01541630502445307, -0.4297794310439868, 1.1671902331969948]
 ee_init_or: [0.0, 0.0, 0.0, 1.0]
 arm_right_init_joint: [-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0]
-stable: 1
+stable: 0
 
 gains:
-  k_v: 30.0
+  k_v: 30.0 #10.0
   k_p: 1.0
 
 rates:
   recording: 50
   testing: 50
 
-threshold: 0.2
+threshold: 0.1
 torso_height: 0.1
 
 vr_commands:
@@ -21,7 +21,7 @@ vr_commands:
   discard: "B"
   record: "trigger"
   block: "middle" 
-  mirroring: 1
+  mirroring: 0
 
 folders:
   data: data
