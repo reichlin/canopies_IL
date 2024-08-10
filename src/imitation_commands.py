@@ -117,7 +117,7 @@ class ImitationNode:
         z_g = goal_pos[2]
         z_ee = self.ee_pos[2]
         dz_des = z_g - z_ee - 0.5378444981063648
-        input(dz_des)
+
         self.torso_controller(dz_des) #0.085
         self.send_viapoint(target_pos, target_rot)
 

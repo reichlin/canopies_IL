@@ -106,6 +106,7 @@ class VRCommands:
             rospy.sleep(5)
         else:
             self.reset()
+
         self.torso_controller(0.085)
         rospy.sleep(5)
 
