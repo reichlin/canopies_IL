@@ -33,7 +33,7 @@ def train(agent, loader_IL, loader_EQUI):
                 s1.to(agent.device)
             ))
 
-            '''loss_nll = agent.training_step_NLL((
+            loss_nll = agent.training_step_NLL((
                 s.to(agent.device),
                 g.to(agent.device),
                 a[:,:3].to(agent.device),
@@ -46,19 +46,19 @@ def train(agent, loader_IL, loader_EQUI):
                 g.to(agent.device),
                 a[:,:3].to(agent.device),
                 s1.to(agent.device)
-            ))'''
+            ))
 
-            loss = loss_policy #+ loss_equi + loss_nll
+            loss = loss_policy - loss_equi + loss_nll
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            #total_loss += loss
+            total_loss += loss
             total_loss += loss_policy #+ loss_equi + loss_nll
             tot_loss_policy += loss_policy
-            #tot_loss_equi += loss_equi
-            #tot_loss_nll += loss_nll
+            tot_loss_equi += loss_equi
+            tot_loss_nll += loss_nll
 
         log_dict = dict(
             total_loss=total_loss / len(loader_IL),
@@ -116,7 +116,7 @@ def train(agent, loader_IL, loader_EQUI):
 
             plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_orientations.png'))
             plt.close()
-            '''
+
             s = states[:1586].to(agent.device)
             g = goals[:1586].to(agent.device)
             z_ee, _, rho = agent(s,g)
@@ -130,7 +130,7 @@ def train(agent, loader_IL, loader_EQUI):
                 distribution = MultivariateNormal(rho_i, torch.eye(3) * 0.001)
                 samples = distribution.rsample((1000,))
                 ax.scatter(samples[:, 0], samples[:, 1], samples[:, 2], s=10, color='blue', alpha=0.01, zorder=2)
-            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_equi_distribution.png'))'''
+            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_equi_distribution.png'))
 
         pbar.update()
 
@@ -138,7 +138,7 @@ def train(agent, loader_IL, loader_EQUI):
 
 def main():
     dataloader_IL = DataLoader(TensorDataset(*data_IL), batch_size=config.batch_size, shuffle=True)
-    #dataloader_EQUI = DataLoader(TensorDataset(*data_EQUI), batch_size=config.batch_size, shuffle=True)
+    dataloader_EQUI = DataLoader(TensorDataset(*data_EQUI), batch_size=config.batch_size, shuffle=True)
 
     agent = Model(
         input_size=config.input_size,
@@ -147,8 +147,8 @@ def main():
         N_gaussians=config.N_gaussians,
         device=config.device
     )
-    #best_score = train(agent, dataloader_IL, dataloader_EQUI)
-    best_score = train(agent, dataloader_IL, data_IL)
+    best_score = train(agent, dataloader_IL, dataloader_EQUI)
+    #best_score = train(agent, dataloader_IL, data_IL)
 
     print(f'Training finished with best score of {best_score}')
 
@@ -190,13 +190,13 @@ if __name__ == "__main__":
     parent_dir = os.path.abspath(os.path.join(os.getcwd(), os.pardir))
 
     # get the dataset for the equivariant representation
-    '''states, goals, actions, next_states, positions = load_data_representation(
+    states, goals, actions, next_states, positions = load_data_representation(
         data_path=os.path.join(parent_dir, f'data/{config.task}'),
         j_only=J_only,
         single_traj=False,
         frequency=1
     )
-    data_EQUI = (states, goals, actions, next_states)'''
+    data_EQUI = (states, goals, actions, next_states)
 
     #get the dataset for imitation learning
     states, goals, actions, next_states, positions = load_data(
