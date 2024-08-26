@@ -14,16 +14,16 @@
     <!-- Launching the low-level controller -->
     <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
 
-    <!-- Launching rviz-->
+    <!-- Launching rviz
     <node type="rviz" name="rviz" pkg="rviz" args="-d $(find imitation_learning)/config/rviz_config.rviz" />
-
+    -->
     <!-- Running VR commands and low-level commands-->
     <node pkg="imitation_learning" type="frame_listener.py" name="frame_listener" output="screen"/>
     <node pkg="imitation_learning" type="vr_commands.py" name="vr_commands_node" output="screen"/>
 
     <!-- Launching the ROS TCP endpoint -->
     <include file="$(find ros_tcp_endpoint)/launch/endpoint.launch">
-        <arg name="tcp_ip" value="192.168.1.206"/>
+        <arg name="tcp_ip" value="192.168.1.128"/>
         <arg name="tcp_port" value="10000"/>
     </include>
 

@@ -8,20 +8,17 @@ from std_msgs.msg import Float64MultiArray
 import random
 from farming_robot_control_msgs.msg import ExternalReference
 from canopies_simulator.msg import BoundBoxArray
-import pickle
 import numpy as np
 import torch
 import os
-import copy
-import time
-from canopies_simulator.srv import Simulator
 import tf
+
 import rospkg
 rospack = rospkg.RosPack()
 package_path = rospack.get_path('imitation_learning')
 module_path = os.path.join(package_path, '/src/utils')
 sys.path.append(module_path)
-from utils import Buffer
+from utils import Buffer, simulator_remove_grape_bunch, check_workspace
 from utils_rl import Agent
 
 class ImitationNode:
@@ -32,20 +29,22 @@ class ImitationNode:
         self.names_right = rospy.get_param('/arm_right_joints')
         self.load_dir = os.path.join(package_path, rospy.get_param('/folders/load'))
         self.save_dir = os.path.join(package_path, rospy.get_param('/folders/result'))
-        self.recording = False
+        self.recording = rospy.get_param('rec')
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.threshold = rospy.get_param('/threshold')
         self.n_frames = rospy.get_param('/agent_hp/n_frames')
+        self.task = rospy.get_param('task')
 
         #init variables
-        self.init_pos = np.array(rospy.get_param('ee_init_pos'))
-        self.init_rot = np.array(rospy.get_param('ee_init_or'))
+        self.init_pose = np.array(rospy.get_param('init_pose'))
         self.joint_pos, self.joint_vel = np.zeros(7), np.zeros(7)
+        self.torso_height = rospy.get_param('torso_height')
         self.ee_pos_msg = ExternalReference()
         self.velocity_msg_right = Float64MultiArray()
         self.velocity_msg_right.data = [0.0] * 8
         self.k_v = rospy.get_param('/gains/k_v')
         self.saved = False
+        self.random_start = False
 
         # setup the recorder
         self.traj_buffer = Buffer(self.save_dir)
@@ -55,127 +54,138 @@ class ImitationNode:
 
         rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right+['torso_lift_joint'])
         rospy.set_param('canopies_simulator/joint_states/rate', 100)
+        self.tf_listener = tf.TransformListener()
+
         rospy.Subscriber('/canopies_simulator/joint_states', JointState, self.callback_joint_state)
         rospy.Subscriber('/canopies_simulator/grape_boxes', BoundBoxArray, self.callback_grapes, queue_size=1)
-        self.publisher_joint_commands = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command',Float64MultiArray, queue_size=1)
-        self.publisher_teleport = rospy.Publisher('/canopies_simulator/moving_base/teleport',Pose, queue_size=1)
-        self.publisher_ee_commands = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
         rospy.Subscriber('/direct_kinematics/rigth_arm_end_effector', PoseStamped, self.callback_end_effector, queue_size=1)
         rospy.Subscriber('/arm_right_forward_velocity_controller/command', Float64MultiArray, self.callback_velocity_commands, queue_size=1)
 
+        self.publisher_joint_commands = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command',Float64MultiArray, queue_size=1)
+        self.publisher_teleport = rospy.Publisher('/canopies_simulator/moving_base/teleport',Pose, queue_size=1)
+        self.publisher_ee_commands = rospy.Publisher('/external_references_for_right_arm', ExternalReference, queue_size=1)
 
-        self.tf_listener = tf.TransformListener()
         rate = rospy.get_param('rates/testing')
         self.control_loop_rate = rospy.Rate(rate)
         self.rate=rate
         rospy.sleep(2)
 
         # init agent and load param
-        self.task = rospy.get_param('task')
-        self.stable = rospy.get_param('stable')
+        agent_hp = rospy.get_param('agent_hp')
+        self.k_ca = rospy.get_param('gains/k_ca')
+        self.collision_avoidance = agent_hp['collision_avoidance']
         self.agent = Agent(
-            input_size= 7, #rospy.get_param('/agent_hp/input_dim')*self.n_frames,
-            goal_size=3,
+            input_size= agent_hp['input_dim'], #rospy.get_param('/agent_hp/input_dim')*self.n_frames,
+            goal_size=agent_hp['goal_dim'],
             action_size=(3,4),
-            N_gaussians=25,
-            stable=self.stable, # if rospy.get_param('agent_name') else False,
+            N_gaussians=agent_hp['n_gaussians'],
+            stable=agent_hp['stable'],
+            sigma=rospy.get_param('agent_hp/sigma'),
             device=self.device
         ).to(self.device)
-
-        models_folder = os.path.join(package_path, self.load_dir, 'grasping_J_only_50hz_grasp_best')
-        self.agent.policy.load_model(os.path.join(models_folder, 'model_policy.pth'))
-        self.agent.encoder.load_model(os.path.join(models_folder, 'model_encoder.pth'))
-        self.agent.MDN.load_model(os.path.join(models_folder, 'model_mdn.pth'))
+        models_folder = os.path.join(package_path, self.load_dir, f'grasping_J_only_{rate}hz_{self.task}')
+        self.agent.load_models(models_folder)
         self.agent.eval()
 
         # init the grapes
-        self.grapes_pos, self.grapes_idx, self.removed_grapes = self.register_grapes()
+        self.removed_grapes = []
+        #self.grapes_pos, self.grapes_idx, self.removed_grapes = []*3 #self.register_grapes()
 
-        self.random_start = True
 
     def main(self):
+
+
         ## ====================================== SETUP =====================================
-        data = np.load(
-            '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/d_act_traj.npz')
-        data_dpositions = data['d_positions']
-        data_orientations = data['orientations']
 
         #locate the robot
         if self.random_start:
             self.random_init()
             self.reset()
-            rospy.sleep(5)
+            #rospy.sleep(5)
         else:
             self.reset()
+        rospy.sleep(1)
 
         #let the user choose the goal position
-        target_pos, target_rot = np.array(self.init_pos), np.array(self.init_rot)
+        target_pos, target_rot = self.init_pose[:3], self.init_pose[3:]
         goal_pos, goal_id = self.get_goal()
-        self.goal = torch.tensor(goal_pos).float().unsqueeze(0).to(self.device)
+        self.goal = torch.tensor(goal_pos[:2]).float().unsqueeze(0).to(self.device)
+        self.head_height_controller(goal_pos[-1] + 0.1 - self.torso_height)
+        rospy.sleep(1)
 
-        #set the torso height
-        z_g = goal_pos[2]
-        z_ee = self.ee_pos[2]
-        dz_des = z_g - z_ee - 0.5378444981063648
+        # collect the position of the obstacles in the latent space
+        obs_pos, obs_idx = self.register_obstacles(goal_id)
+        obs_tsr = torch.from_numpy(self.joint_pos).float().unsqueeze(0).to(self.device)
+        z_obs = ((self.agent.encoder(obs_tsr).detach().cpu().squeeze() +
+                  torch.from_numpy(obs_pos).float() -
+                  torch.tensor(self.ee_pos))).float()
+        sigma = 0.5**2
+        print('\nObstacles:')
+        for i, p in zip(obs_idx, obs_pos):
+            print(f'{i}: {p.tolist()}')
 
-        self.torso_controller(dz_des) #0.085
-        self.send_viapoint(target_pos, target_rot)
+        ## ====================================== SIM LOOP ========================================================
 
-        if self.recording:
-            self.traj_buffer.target_positions['value'].append(list(target_pos))
-            self.traj_buffer.target_orientations['value'].append(list(target_rot))
-            self.traj_buffer.target_positions['time'].append(rospy.get_time())
-            self.traj_buffer.target_orientations['time'].append(rospy.get_time())
-
-        ## ====================================== SIM LOOP ======================================
-
-        self.recording = rospy.get_param('rec')
         self.sim_step = 0
-        rospy.loginfo(f"Starting ... agent{' stable ' if self.stable else ' '}aiming to {goal_pos} of id {goal_id}")
+        rospy.loginfo(f"Starting ... agent{' stable ' if self.agent.stable else ' '}aiming to {goal_pos} of id {goal_id}")
 
         while not rospy.is_shutdown():
-            obs_tsr = torch.from_numpy(self.joint_pos).float().unsqueeze(0).to(self.device)
 
-            # get the new displacement for the viapoint (position) and the new orientation
-            action = self.agent.select_action(
-                obs_tsr, self.goal,
-                torch.from_numpy(target_pos).float().unsqueeze(0).to(self.agent.device)
-            ).detach().cpu().squeeze().numpy()
+            if goal_id in self.removed_grapes:
+                self.block()
 
-            d_target_pos, target_rot = action[:3], action[3:]
-            target_rot = data_orientations[self.sim_step]
-            target_pos += data_dpositions[self.sim_step]
-            #target_pos += d_target_pos
+            else:
+                obs_tsr = torch.from_numpy(self.joint_pos).float().unsqueeze(0).to(self.device)
 
-            # publish a new commanded pos
-            self.send_viapoint(target_pos, target_rot)
+                # get the new displacement for the viapoint (position) and the new orientation
+                action = self.agent.select_action(
+                    obs_tsr, self.goal
+                ).detach().cpu().squeeze().numpy()
 
-            if self.sim_step%50==0:
-                rospy.loginfo(f"{self.sim_step} Target: {target_pos} - {target_rot}")
-
-            if self.recording:
-                self.traj_buffer.target_positions['value'].append(list(target_pos))
-                self.traj_buffer.target_orientations['value'].append(list(target_rot))
-                self.traj_buffer.command_positions['value'].append()
-                self.traj_buffer.target_positions['time'].append(rospy.get_time())
-                self.traj_buffer.target_orientations['time'].append(rospy.get_time())
-                self.traj_buffer.command_positions['time'].append(rospy.get_time())
+                if self.collision_avoidance:
+                    action_CA = np.zeros(7)
+                    act, p = self.agent.compute_CA(
+                        obs_tsr, z_obs.to(self.device), sigma=sigma
+                    )
+                    action[:3] += act[:3].detach().cpu().squeeze().numpy()*self.k_ca
+                    #print('\n', p.item(), ' - ',act)
 
 
-            #remove a grape if necessary
-            self.grape_revove_check(self.ee_pos)
+                # compute and publish the new commanded pose
+                d_target_pos, target_rot = action[:3], action[3:]
+                target_pos += d_target_pos
+                #target_rot = data_orientations[self.sim_step]
+                #target_pos += data_dpositions[self.sim_step]
+                self.send_viapoint(target_pos, target_rot)
+                t = rospy.get_time()
 
-            # rec variables
-            if self.recording and (not self.removed_grapes==[] or self.sim_step == 1000) and not self.saved:
-                self.traj_buffer.grapes_positions.append(self.goal.detach().cpu().unsqueeze(0).numpy())
-                self.traj_buffer.show_current_status()
-                self.traj_buffer.save_trajectory(f'{self.task}.pkl')
-                self.saved = True
+                #remove a grape if necessary
+                self.grape_revove_check(self.ee_pos)
+
+                if self.sim_step % 50==0:
+                    rospy.loginfo(f"{self.sim_step} Target: {target_pos} - {target_rot}")
+
+                if self.recording:
+                    self.traj_buffer.target_positions['value'].append(list(target_pos))
+                    self.traj_buffer.target_orientations['value'].append(list(target_rot))
+                    self.traj_buffer.command_positions['value'].append(list(d_target_pos))
+                    self.traj_buffer.target_positions['time'].append(t)
+                    self.traj_buffer.target_orientations['time'].append(t)
+                    self.traj_buffer.command_positions['time'].append(t)
+
+                    if (not self.removed_grapes==[] or self.sim_step == 1000) and not self.saved:
+                        self.traj_buffer.grapes_positions.append(self.goal.detach().cpu().unsqueeze(0).numpy())
+                        self.traj_buffer.show_current_status()
+                        self.traj_buffer.save_trajectory(f'{self.task}.pkl')
+                        self.saved = True
 
             self.sim_step += 1
             self.control_loop_rate.sleep()
 
-    ## ====================================== CALLBACKS =================================================
+
+
+
+    ## ====================================== CALLBACKS ==========================================================
 
     def callback_joint_state(self, joints_msg):
         t = rospy.get_time()
@@ -219,16 +229,7 @@ class ImitationNode:
             self.traj_buffer.cartesian_orientations['time'].append(t)
 
 
-    ## ----------------- OTHER METHODS -----------------
-
-    def simulator_remove_grape_bunch(self, id_: int):
-        """
-        Removes the bunch corresponding to the input id
-        """
-        rospy.wait_for_service('/simulator')
-        cmd = rospy.ServiceProxy('/simulator', Simulator)
-        cmd("RemoveGrapeBunch", id_, False, "")
-
+    ## ====================================== OTHER METHODS ==========================================================
 
     def grape_revove_check(self, ee_pos):
         """
@@ -238,7 +239,7 @@ class ImitationNode:
         threshold = (dists < self.threshold)*1.
         for i in np.nonzero(threshold)[0]:
             if self.grapes_idx[i] not in self.removed_grapes:
-                self.simulator_remove_grape_bunch(int(self.grapes_idx[i]))
+                simulator_remove_grape_bunch(int(self.grapes_idx[i]))
                 rospy.loginfo(f'\n{self.grapes_idx[i]} grape removed')
                 self.removed_grapes.append(self.grapes_idx[i])
 
@@ -269,52 +270,92 @@ class ImitationNode:
         grapes_pos = np.array(grapes_pos)
         return grapes_pos, grapes_idx, []
 
+    def register_obstacles(self, goal_id):
+        """
+        Returns all obstacles baricentrum.
+        """
+        obs_pos = []
+        idxs = []
+        grapes_data = rospy.wait_for_message('/canopies_simulator/grape_boxes', BoundBoxArray, timeout=None)
+        for box in grapes_data.boxes:
+            if not box.index == goal_id:
+                obs_pos.append([
+                    (box.xmax+box.xmin)/2,
+                    (box.ymax+box.ymin)/2,
+                    (box.zmax+box.zmin)/2
+                ])
+                idxs.append(box.index)
+        return np.array(obs_pos), idxs
+
+
     def get_goal(self):
         """
         Asks to the user to choose goal grape to grape, returning the id and the goal position
         """
-        input(f"\n{'-'*50}\nLocate your self in the simulator. Once done, press enter to continue.")
-        available_ids = {}
+        located_correctly = False
+        workspace = rospy.get_param('workspace_cylinder')
+
+        while not located_correctly:
+
+            input(f"\n{'-'*50}\nLocate your self in the simulator. Once done, press enter to continue.")
+
+            available_ids = {
+                g_id: (g_pos, np.linalg.norm(np.subtract(g_pos[:2], self.ee_pos[:2]), axis=-1))
+                for g_id, g_pos in zip(self.grapes_idx, self.grapes_pos)
+                if check_workspace(g_pos, c=workspace['centre'],
+                                   r_bounds=tuple(map(float,workspace['radius_bounds'])),
+                                   theta_bounds=tuple(map(float,workspace['theta_bounds'])),
+                                   h=workspace['height'], idx=g_id)
+            }
+            if len(available_ids) == 0:
+                rospy.logerr(f"No grape reachable. Please relocate again.")
+            else:
+                located_correctly = True
+
         print("\nThe grapes reachable from this position are the following:")
-        for g_id, g_pos in zip(self.grapes_idx, self.grapes_pos):
-            dist = np.linalg.norm(np.subtract(g_pos, self.ee_pos), axis=-1)
-            if dist<1.0:
-                print(f' - {g_id} at distance {round(dist, 3)}m from the end effector')
-                available_ids[g_id] = g_pos
+        for idx, (pos, dist) in available_ids.items():
+            print(f' - {idx} at distance {round(dist, 3)}m ({pos}) from the end effector')
+
         try:
             goal_id = int(input("Input the id of the grape to collect?: "))
         except:
             goal_id = None
+
         while not goal_id in available_ids:
             try:
                 goal_id = int(input("id not valid. Please enter a valid id (from the list): "))
             except:
                 pass
-        return available_ids[goal_id], goal_id
 
-    def torso_controller(self, h):
+        return available_ids[goal_id][0], goal_id
+
+    def head_height_controller(self, h):
         """
-        Moves the torso joint until a specif height (considering head_2_link wrt base_frame as reference)
+        Reach the head height wrt base_footprint lifting the torso lift joint
         """
-        x_0, _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
         e, z = 1., 0.
+        start = rospy.get_time()
         while abs(e)>0.001:
             self.velocity_msg_right.data = [0.0] * 7 + [0.1 * np.sign(e)]
             rospy.sleep(0.01)
-            x, _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
-            z = x[2] - x_0[2]
-            e = h-z
+            (_, _, z), _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
+            e = h - z
+            if rospy.get_time() - start > 5.0:
+                break
         self.velocity_msg_right.data = [0.0] * 8
         self.publisher_joint_commands.publish(self.velocity_msg_right)
         return z
 
     def reset(self):
+        """
+        Commands to the controller the init pose
+        """
         ee_pos_msg = ExternalReference()
-        ee_pos_msg.position = Point(x=self.init_pos[0], y=self.init_pos[1], z=self.init_pos[2])
-        ee_pos_msg.orientation = Quaternion(x=self.init_rot[0],
-                                            y=self.init_rot[1],
-                                            z=self.init_rot[2],
-                                            w=self.init_rot[3])
+        ee_pos_msg.position = Point(x=self.init_pose[0], y=self.init_pose[1], z=self.init_pose[2])
+        ee_pos_msg.orientation = Quaternion(x=self.init_pose[3],
+                                            y=self.init_pose[4],
+                                            z=self.init_pose[5],
+                                            w=self.init_pose[6])
         self.publisher_ee_commands.publish(ee_pos_msg)
 
 
@@ -327,19 +368,30 @@ class ImitationNode:
         self.publisher_ee_commands.publish(self.ee_pos_msg)
 
     def random_init(self):
+        """
+        Teleport the robot to a randomized location such that there is a reachable grape
+        """
+        workspace = rospy.get_param('workspace_cylinder')
+        _, _, z_t = rospy.get_param('mobile_base_init_pos')
+        grape_pos = np.array(rospy.get_param('grape_27_position'))
+        mb_offset = np.array(rospy.get_param('mobile_base_offset'))
 
-        x_t, y_t, z_t = random.uniform(-0.1, 0.6), random.uniform(-0.5, 0.1), 0.24
-        th_t = 0
+        r = random.uniform(*workspace['radius_bounds'])
+        theta = random.uniform(*(np.array(workspace['theta_bounds'])+np.pi))
+        noise = (r*np.cos(theta), r*np.sin(theta), 0.)
+        target_pos = grape_pos + mb_offset - workspace['centre'] + noise
+        target_pos[2] = z_t
 
-        (x_g, y_g, z_g) = (0.8866932392120361, -1.568265438079834, 1.7083934545516968)
-        #(8.601644515991211, -1.2150168418884277, 1.6853939294815063)
-        #(x_g, y_g, z_g), _ = self.get_transform(target_frame='map', source_frame=f'Bunch_27')
         pose = Pose()
-        pose.position = Point(x_g - x_t, y_g - y_t, z_t)
-        pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(0., 0., th_t))
+        pose.position = Point(*target_pos)
+        pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(0., 0., 0.))
         self.publisher_teleport.publish(pose)
+        rospy.loginfo(f'Teleported to {target_pos}')
+        return 27
 
-        print(f'Teleported to {(x_t, y_t, z_t)}')
+    def block(self):
+        self.velocity_msg_right.data = [0.0] * 8
+        self.publisher_joint_commands.publish(self.velocity_msg_right)
 
 
 

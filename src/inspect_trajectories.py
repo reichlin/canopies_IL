@@ -39,10 +39,10 @@ import copy
 if __name__ == "__main__":
     task = 'grasping'
 
-    data_dir = f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/grasp_best'
+    data_dir = f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/grasp_last'
 
     #load training traj. positions
-    data_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl') and f.startswith('1723127422')]
+    data_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
     positions, goals, actions = [],[],[]
     for file_name in data_files:
         # get the dataset
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         obj_poses = dataset['grapes_positions']
 
         pos = dataset['cartesian_positions']['value']
-        act = dataset['target_positions']['value']
+        act = dataset['command_positions']['value']
         grape_idx = np.argmin(np.linalg.norm(np.array(obj_poses) - np.array(pos[-1]), axis=1))
         goals.append(obj_poses[grape_idx])
         actions.append(act)
@@ -69,12 +69,10 @@ if __name__ == "__main__":
 
     #load recorded traj. positions
     data_files = [f for f in os.listdir(results_dir)
-                  if f.endswith('.pkl') and f.startswith('prove_new') ]
+                  if f.endswith('.pkl') and f.startswith('default') ]
     positions, goals, actions = [],[],[]
 
-
     car = 'blue'
-    siium = 10
     for file_name in data_files:
         file_path = os.path.join(results_dir, file_name)
         print(file_path)
@@ -84,7 +82,7 @@ if __name__ == "__main__":
         act_ = copy.deepcopy(act)
         pos = np.array(rec_traj_dict['cartesian_positions']['value'])
         goal = rec_traj_dict['grapes_positions']
-        act = np.array(rec_traj_dict['target_positions']['value'])# + np.array([0.,0.,np.random.uniform(-0.1,0.1)])
+        act = np.array(rec_traj_dict['command_positions']['value'])# + np.array([0.,0.,np.random.uniform(-0.1,0.1)])
 
         goals.append(goal)
         actions.append(act)

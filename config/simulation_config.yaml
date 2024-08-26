@@ -2,35 +2,50 @@ arm_right_joints: ["arm_right_1_joint", "arm_right_2_joint", "arm_right_3_joint"
 arm_left_joints: ["arm_left_1_joint", "arm_left_2_joint", "arm_left_3_joint", "arm_left_4_joint", "arm_left_5_joint", "arm_left_6_joint", "arm_left_7_joint"]
 ee_init_pos: [0.01541630502445307, -0.4297794310439868, 1.1671902331969948]
 ee_init_or: [0.0, 0.0, 0.0, 1.0]
+init_pose: [0.01541630502445307, -0.4297794310439868, 1.1671902331969948, 0.0, 0.0, 0.0, 1.0]
 arm_right_init_joint: [-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0]
-stable: 0
+mobile_base_init_pos: [5.000, -1.500, 0.186] #
+mobile_base_offset: [0.410, 0.0, 0.0]
+grape_27_position: [0.887, -1.568, 1.708]
+
+workspace_cylinder:
+  height: 1.5 #1.6
+  radius_bounds: [0.25, 0.6]
+  centre: [0.4, -0.1, 0.]
+  theta_bounds: [-1.1780972450961724, 0.39269908169872414]   # -3*pi/8, pi/8
 
 gains:
   k_v: 30.0 #10.0
   k_p: 1.0
+  k_r: 0.8 # damping on commanded orientations
+  k_ca: 5.0
 
 rates:
   recording: 50
-  testing: 50
+  testing: 10 #50
 
-threshold: 0.1
-torso_height: 0.1
+threshold: 0.1  # distance threshold for the grapes from the ee to be considered as picked
+torso_height: 0.4  #wanted distance of the head form the grape peduncle along the z-axes
 
 vr_commands:
   save: "A"
   discard: "B"
   record: "trigger"
   block: "middle" 
-  mirroring: 0
+  mirroring: 1
 
 folders:
   data: data
   load: behavioural_cloning/params
   result: results
 
-
 agent_hp:
+  stable: 1
   n_frames: 1
-  input_dim: 14 #56 #59
+  input_dim: 7
+  goal_dim: 2
   hidden_dim: 128
-  output_dim: 3
+  action_dim: (3,4)
+  n_gaussians: 25
+  sigma: 0.05
+  collision_avoidance: 1

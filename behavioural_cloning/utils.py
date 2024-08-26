@@ -24,14 +24,21 @@ def get_datafiles(data_path, ends_with='.npz'):
 
 class MLP(nn.Module):
 
-    def __init__(self, input_size, output_size, hidden:int=32):
+    def __init__(self, input_size, output_size, hidden:int=32, big=False):
         super(MLP, self).__init__()
-        self.f = nn.Sequential(nn.Linear(input_size, hidden),
+        if big:
+            self.f = nn.Sequential(nn.Linear(input_size, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, output_size))
+        else:
+            self.f = nn.Sequential(nn.Linear(input_size, hidden),
                                nn.ReLU(),
                                nn.Linear(hidden, hidden),
                                nn.ReLU(),
-                               #nn.Linear(hidden, hidden),
-                               #nn.ReLU(),
                                nn.Linear(hidden, output_size))
 
     def forward(self, x, g=None):
@@ -102,10 +109,10 @@ def load_data_representation(data_path, frequency=10, j_only=False, single_traj=
 
     data_files = get_datafiles(data_path, '.pkl')
 
-    print(f'Loading {len(data_files)} trajectory files.')
+    print(f'Loading {len(data_files)} trajectory files for equivariance representations.')
 
     # Initialize lists to store inputs and labels from all files
-    states, goals, actions, next_states,positions, times = [], [], [], [], [], []
+    states, goals, actions, next_states, positions = [], [], [], [], []
 
     # Load data from each .npz file
     for file_name in data_files:
@@ -123,20 +130,26 @@ def load_data_representation(data_path, frequency=10, j_only=False, single_traj=
         J_time = np.array(dataset['joint_velocities']['time'])
         obj_poses = np.array(dataset['grapes_positions'])
 
+
+        ee_pos[:5] = ee_pos[5]
+        ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
+
+
+        all_indices = [i for i in range(J_time.shape[0])]
+
         for i in range(f):
             # downsample with the frequency
-            J_array_i = J_array[i::f]
-            J_dot_array_i = J_dot_array[i::f]
-            J_time_i = J_time[i::f]
+            indices_i = all_indices[i::f]
+            J = J_array[indices_i][:-1]
+            J_next = J_array[indices_i][1:]
+            J_dot = J_dot_array[indices_i][:-1]
+            J_dot_next = J_dot_array[indices_i][1:]
+            timesteps = J_time[indices_i][:-1]
+            timesteps_next = J_time[indices_i][1:]
+            pos = ee_spline(timesteps)
 
-            # get the states and the timesteps
-            J = J_array_i[:-1]
-            J_next = J_array_i[1:]
-            J_dot = J_dot_array_i[:-1]
-            J_dot_next = J_dot_array_i[1:]
-            timesteps = J_time_i[:-1]
-            timesteps_next = J_time_i[1:]
 
+            #compose the states (with joint vel and configurations)
             state = J if j_only else np.concatenate((J, J_dot), -1)
             state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
 
@@ -145,16 +158,14 @@ def load_data_representation(data_path, frequency=10, j_only=False, single_traj=
             goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
 
             #SPLINING AND SAMPLING
-            ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
             act = ee_spline(timesteps_next) - ee_spline(timesteps)
-            p = ee_spline(timesteps)
 
             # append the data
             states.append(state)
             goals.append(goal)
             actions.append(act)
             next_states.append(state_next)
-            positions.append(p)
+            positions.append(pos)
 
     if single_traj:
         return states, goals, actions, next_states, positions
@@ -164,109 +175,26 @@ def load_data_representation(data_path, frequency=10, j_only=False, single_traj=
         actions = torch.from_numpy(np.concatenate(actions, 0)).float()
         next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
         positions = torch.from_numpy(np.concatenate(positions, 0)).float()
-
         return states, goals, actions, next_states, positions
 
 
 
 
 
-def load_data_new(data_path, j_only=True, convolving=True, single_traj=False):
+def load_data(data_path, j_only=True, convolving=True, single_traj=False, frequency=50):
+
+    if not 50 / frequency % 1 == 0:
+        raise ValueError(f"Frequency must be a dividend of 50, not {frequency}.")
+    f = int(50 / frequency)
 
     data_files = get_datafiles(data_path, '.pkl')
     print(f'Loading {len(data_files)} trajectory files.')
 
-    states, goals, actions, next_states = [], [], [], []
-
-    for file_name in data_files:
-
-        #get the dataset
-        file_path = os.path.join(data_path, file_name)
-        with open(file_path, 'rb') as file:
-            dataset = pickle.load(file)
-
-        # get the data
-        ee_pos = np.array(dataset['cartesian_positions']['value'])
-        J_array = np.array(dataset['joint_positions']['value'])
-        J_dot_array = np.array(dataset['joint_velocities']['value'])
-        J_time = np.array(dataset['joint_velocities']['time'])
-        obj_poses = np.array(dataset['grapes_positions'])
-        target_pos_array = np.array(dataset['target_positions']['value'])
-        target_pos_time = np.array(dataset['target_positions']['time'])
-        target_rot_array = np.array(dataset['target_orientations']['value'])
-        target_rot_time = np.array(dataset['target_orientations']['time'])
-
-
-        # get the states
-        J = J_array[:-1]
-        J_next = J_array[1:]
-        J_dot = J_dot_array[:-1]
-        J_dot_next = J_dot_array[1:]
-        timesteps = J_time[:-1]
-        state = J if j_only else np.concatenate((J, J_dot), -1)
-        state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
-
-        # get the grapes positions
-        grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
-        goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
-
-        #SPLINING AND SAMPLING
-        target_pos_spline = interp1d(target_pos_time, target_pos_array, kind='cubic', fill_value="extrapolate", axis=0)
-        d_act_pos = target_pos_spline(J_time[1:]) - target_pos_spline(timesteps)
-
-        target_rot_spline = interp1d(target_rot_time, target_rot_array, kind='cubic', fill_value="extrapolate", axis=0)
-        act_rot = normalize(target_rot_spline(timesteps), axis=1)
-
-        #CONVOLVING
-        if convolving:
-            d_act_pos, idx = convolve(d_act_pos)
-            state = state[idx]
-            state_next = state_next[idx]
-            goal = goal[idx]
-            act_rot = act_rot[idx]
-            timesteps = timesteps[idx]
-
-        act = np.concatenate((d_act_pos, act_rot), -1)
-
-
-        # append the data
-        states.append(state)
-        goals.append(goal)
-        actions.append(act)
-        next_states.append(state_next)
-
-        '''fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
-
-        ax0.scatter(act[:, 0], act[:, 1], s=1, zorder=1, color='red')
-        ax1.scatter(act[:, 0], act[:, 1], s=1, zorder=1, color='red')
-        ax2.scatter(act[:, 1], act[:, 2], s=1, zorder=1, color='red')
-        plt.title(file_name)
-        plt.show()'''
-
-    if single_traj:
-        return states, goals, actions, next_states
-    else:
-        states = torch.from_numpy(np.concatenate(states, 0)).float()
-        goals = torch.from_numpy(np.concatenate(goals, 0)).float()
-        actions = torch.from_numpy(np.concatenate(actions, 0)).float()
-        next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
-        return states, goals, actions, next_states
-
-
-
-def load_data(data_path, j_only=True, convolving=True, single_traj=False):
-
-    data_files = get_datafiles(data_path, '.pkl')
-
-    print(f'Loading {len(data_files)} trajectory files.')
-
-    # Initialize lists to store inputs and labels from all files
     states, goals, actions, next_states, positions = [], [], [], [], []
+    cnt=0
 
-    cnt = 0
-    # Load data from each .npz file
     for file_name in data_files:
-
+        cnt+=1
         #get the dataset
         file_path = os.path.join(data_path, file_name)
         with open(file_path, 'rb') as file:
@@ -274,82 +202,70 @@ def load_data(data_path, j_only=True, convolving=True, single_traj=False):
 
         # get the data
         ee_pos = np.array(dataset['cartesian_positions']['value'])
-        ee_time = dataset['cartesian_positions']['time']
         J_array = np.array(dataset['joint_positions']['value'])
         J_dot_array = np.array(dataset['joint_velocities']['value'])
         J_time = np.array(dataset['joint_velocities']['time'])
         obj_poses = np.array(dataset['grapes_positions'])
-        target_pos_array = np.array(dataset['target_positions']['value'])
-        target_pos_time = np.array(dataset['target_positions']['time'])
         target_rot_array = np.array(dataset['target_orientations']['value'])
-        target_rot_time = np.array(dataset['target_orientations']['time'])
+        dpos_array = np.array(dataset['command_positions']['value'])
 
-        # get the states
-        J = J_array[:-1]
-        J_next = J_array[1:]
-        J_dot = J_dot_array[:-1]
-        J_dot_next = J_dot_array[1:]
-        timesteps = J_time[:-1]
+        # SPLINING AND SAMPLING
+        dpos_array[:10] = dpos_array[10]
 
-        state = J if j_only else np.concatenate((J, J_dot), -1)
-        state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
+        dpos_spline = interp1d(dataset['command_positions']['time'], dpos_array, kind='cubic', fill_value="extrapolate",
+                               axis=0)
+        target_rot_spline = interp1d(dataset['target_orientations']['time'], target_rot_array, kind='cubic',
+                                     fill_value="extrapolate", axis=0)
+        ee_spline = interp1d(dataset['cartesian_positions']['time'], ee_pos, kind='cubic', fill_value="extrapolate",
+                             axis=0)
+        d_act_pos = dpos_spline(J_time)
 
-        # get the grapes positions
-        grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
-        goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
+        act_rot = normalize(target_rot_spline(J_time), axis=1)
+        ee_pos = ee_spline(J_time)
 
-        #offset_corrections!!!
-        offset = goal[0, 2] - ee_pos[0, 2]
-        target_pos_array[:,2] += 0.547888700559957 - offset
+        all_indices = [i for i in range(J_time.shape[0])]
 
-        #SPLINING AND SAMPLING
-        target_pos_spline = interp1d(target_pos_time, target_pos_array, kind='cubic', fill_value="extrapolate", axis=0)
-        act_pos = target_pos_spline(timesteps)
+        for i in range(f):
 
-        target_rot_spline = interp1d(target_rot_time, target_rot_array, kind='cubic', fill_value="extrapolate", axis=0)
-        act_rot = normalize(target_rot_spline(timesteps), axis=1)
-        act = np.concatenate((act_pos, act_rot), -1)
+            # downsample with the frequency
+            indices_i = all_indices[i::f]
+            J = J_array[indices_i][:-1]
+            J_next = J_array[indices_i][1:]
+            J_dot = J_dot_array[indices_i][:-1]
+            J_dot_next = J_dot_array[indices_i][1:]
+            act_rot_i = act_rot[indices_i][:-1]
+            pos = ee_pos[indices_i][:-1]
+            timesteps = J_time[indices_i][:-1]
 
-        ee_spline = interp1d(np.array(ee_time), ee_pos, kind='cubic', fill_value="extrapolate", axis=0)
-        pos = ee_spline(timesteps)
+            # get the states
+            state = J if j_only else np.concatenate((J, J_dot), -1)
+            state_next = J_next if j_only else np.concatenate((J_next, J_dot_next), -1)
 
+            # get the grapes positions
+            grape_idx = np.argmin(np.linalg.norm(obj_poses - ee_pos[-1], axis=1))
+            goal = np.tile(obj_poses[grape_idx], (state.shape[0], 1))
 
-        '''# --------------------------------------------------------
-        fig,axs = plt.subplots(2,1)
-        axs[0].scatter(timesteps, act_pos[:, 0],s=1,label='x')
-        axs[0].scatter(timesteps, act_pos[:, 1],s=1, label='y')
-        #axs[0].scatter(timesteps, act_pos[:, 2],s=1, label='z')
-        axs[0].set_title(f'positions - {file_name}')
-        axs[0].legend()
+            #integrate the actions for downsampling
+            d_act_pos_i = np.array([np.sum(d_act_pos[idx:idx+f], axis=0) for idx in indices_i])[:-1]
 
-        axs[1].scatter(timesteps, act_rot[:, 0],s=1,label='x')
-        axs[1].scatter(timesteps, act_rot[:, 1],s=1, label='y')
-        axs[1].scatter(timesteps, act_rot[:, 2],s=1, label='z')
-        axs[1].scatter(timesteps, act_rot[:, 3],s=1, label='w')
-        axs[1].set_title(f'rotations - {file_name}')
-        axs[1].legend()
+            #CONVOLVING
+            if convolving:
+                d_act_pos_i, idx = convolve(d_act_pos_i)
+                state = state[idx]
+                state_next = state_next[idx]
+                goal = goal[idx]
+                pos = pos[idx]
+                act_rot_i = act_rot_i[idx]
+                timesteps = timesteps[idx]
 
-        plt.show()'''
-        # --------------------------------------------------------
+            act = np.concatenate((d_act_pos_i, act_rot_i), -1)
 
-        #CONVOLVING
-        '''if convolving:
-            act_pos, idx = convolve(act_pos)
-            state = state[idx]
-            state_next = state_next[idx]
-            goal = goal[idx]
-            pos = pos[idx]
-            timesteps = timesteps[idx]'''
-
-        # append the data
-        states.append(state)
-        goals.append(goal)
-        actions.append(act)
-        next_states.append(state_next)
-        positions.append(pos)
-
-    plt.show()
-
+            # append the data
+            states.append(state)
+            goals.append(goal)
+            actions.append(act)
+            next_states.append(state_next)
+            positions.append(pos)
     if single_traj:
         return states, goals, actions, next_states, positions
     else:
@@ -359,7 +275,6 @@ def load_data(data_path, j_only=True, convolving=True, single_traj=False):
         next_states = torch.from_numpy(np.concatenate(next_states, 0)).float()
         positions = torch.from_numpy(np.concatenate(positions, 0)).float()
         return states, goals, actions, next_states, positions
-
 
 def get_config(yaml_file):
     parser = argparse.ArgumentParser(description="Behavioral cloning")
@@ -426,39 +341,16 @@ if __name__ == '__main__':
     import sys
     module_path = '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning'
     sys.path.append(module_path)
-    task='grasping'
+    task='grasp_last'
 
-    '''states, goals, actions, next_states, positions, d_positions = load_data_representation(
-        f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
-        frequency=1
+    states, goals, actions, next_states, positions = load_data_representation(
+        data_path=f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
+        j_only=True,
+        single_traj=True,
+        frequency=10
     )
-    '''
-    states, goals, actions, next_states, positions = load_data_new(
-        '/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/grasp_best',
-        #f'/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/data/{task}',
-        convolving=True,
-        single_traj=True
-    )
-    from model import Model
-
-    agent = Model(
-        input_size=7,
-        goal_size=3,
-        action_size=(3, 4),
-        N_gaussians=25,
-        device='cpu'
-    )
-    agent.policy.load_model('/home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/grasping_J_only_50hz_grasp_best/model_policy.pth')
-
-    '''for i in range(len(goals)):
-        g = np.expand_dims(goals[i][0],0)
-        g_ = g+np.array([[0.01,-0.1,0.]])
-
-        print('\n', g)
-        #print(a.detach().cpu().tolist(), ' from ', g)
-        #print(a_.detach().cpu().tolist(), ' from ', g_)'''
-
-    dio = 0
+    plt.scatter(np.concatenate(positions[:5])[:, 1], np.concatenate(positions[:5])[:, 2])
+    plt.show()
 
 
 

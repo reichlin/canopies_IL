@@ -11,17 +11,22 @@ import torch.nn.functional as F
 
 class MLP(nn.Module):
 
-    def __init__(self, input_size, output_size,hidden:int=32):
+    def __init__(self, input_size, output_size, hidden: int = 32, big=False):
         super(MLP, self).__init__()
-        hidden = 32
-        self.f = nn.Sequential(nn.Linear(input_size, hidden),
-                               nn.ReLU(),
-                               nn.Linear(hidden, hidden),
-                               nn.ReLU(),
-                               #nn.Linear(hidden, hidden),
-                               #nn.ReLU(),
-                               nn.Linear(hidden, output_size))
-
+        if big:
+            self.f = nn.Sequential(nn.Linear(input_size, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, output_size))
+        else:
+            self.f = nn.Sequential(nn.Linear(input_size, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, hidden),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden, output_size))
     def forward(self, x, g=None):
         if g is not None:
             return self.f(torch.cat([x, g], -1))
@@ -75,70 +80,70 @@ class MLPDual(nn.Module):
 
 class Agent(nn.Module):
 
-    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable=True,  device=None):
+    def __init__(self, input_size, goal_size, action_size, N_gaussians, sigma=0.001, stable=True,  device=None):
         super(Agent, self).__init__()
         self.stable = stable
         self.N_gaussians = N_gaussians
         self.phi = 0.1 #0.002
 
-        self.encoder = MLP(input_size, action_size[0]).to(device)
+        self.encoder = MLP(input_size, action_size[0], hidden=32).to(device)
         self.policy = MLPDual(input_size + goal_size, action_size).to(device)
-        self.MDN = MLP(goal_size, action_size[0] * N_gaussians).to(device)
+        self.MDN = MLP(goal_size, action_size[0] * N_gaussians, hidden=64, big=True).to(device)
 
-        self.density_estimator = KDE()
+        self.density_estimator = KDE(h=sigma)
+
+        self.collision_avoidance_estimator = KDE(h=1.)
 
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.parameters(), lr=0.001)
         self.device = device
 
-    '''def select_action(self, s, g):
-        z = self.encoder(s)
-        mu = self.MDN(g).reshape(25, 3)
-        rho, grad = self.density_estimator.get_gradient(z, mu)
+    def select_action(self, s, g):
         a_IL = self.policy(s, g)
-        p = torch.tanh(rho * self.phi)
 
-        if self.stable:
-            print(f'p = {p}, grad = {grad} ')
-            return p*a_IL + (1-p)*grad
-        else:
-            return a_IL'''
-
-    def select_action(self, s, g, a_last):
-
-        z = self.encoder(s)
-        mu = self.MDN(g).reshape(25, 3)
-        rho, grad = self.density_estimator.get_gradient(z, mu)
-        a_IL = self.policy(s, g)
-        p = torch.tanh(rho * self.phi)
-        if self.stable:
-            a_pos = a_last + p * (a_IL[:,:3] - a_last) + (1 - p) * grad
-            a_rot = a_IL[:,3:]
-            print(f'p = {p.item()}, d_aIL = {[round(x.item(),2) for x in a_IL.detach().cpu().squeeze()]}, grad = {[round(x.item(),2) for x in grad.detach().cpu().squeeze()]}')
-            return torch.cat((a_pos, a_rot), dim=-1)
-        else:
+        if not self.stable:
             return a_IL
+        else:
+            #compute the back-to-the-manifold action and probability
+            z = self.encoder(s)
+            mu = self.MDN(g).reshape(25, 3)
+            rho, a_GRAD = self.density_estimator.get_gradient(z, mu)
+            #p = torch.tanh(rho * self.phi)
+            p = torch.sigmoid(rho - 0.5)
+
+            a = torch.zeros_like(a_IL)
+            a[:,:3] = (1 - p) * a_GRAD + p * a_IL[:,:3]
+            a[:,3:] = a_IL[:,3:]
+            return a
+
+    def compute_CA(self, s, z_obs, sigma=0.5):
+        z = self.encoder(s)
+        z.requires_grad_(True)
+        diff = torch.cdist(z, z_obs, p=2)
+        delta = - 0.5 * (diff / sigma) ** 2
+        p = (2 * np.pi * (sigma ** 3)) ** (-0.5) * torch.exp(delta)
+        rho = torch.sum(p)
+        rho.requires_grad_ = True
+        grad = torch.autograd.grad(outputs=rho, inputs=z)[0]
+        return -grad, torch.sigmoid(rho - 0.5)
 
     def save_model(self, path):
         torch.save(self.state_dict(), path)
 
-    def load_model(self, path):
+    def load_models(self, path):
         print("Loading models from {path}".format(path=path))
         self.policy.load_state_dict(torch.load(os.path.join(path, 'model_policy.pth')))
         self.encoder.load_state_dict(torch.load(os.path.join(path, 'model_encoder.pth')))
         self.MDN.load_state_dict(torch.load(os.path.join(path, 'model_mdn.pth')))
         #self.load_state_dict(torch.load(path))
 
-
-
 class KDE():
 
-    def __init__(self):
+    def __init__(self, d=3, h=0.001, ni=0.005):
         super(KDE, self).__init__()
-        self.N = 25
-        self.d = 3
-        self.h = 0.005 #1.0
-        self.ni = 0.005 #0.0005
+        self.d = d
+        self.h = h
+        self.ni = ni
 
     def K(self, x, mu):
         diff = torch.cdist(x, mu, p=2)
@@ -151,11 +156,12 @@ class KDE():
         p = (2 * np.pi * (self.h ** self.d)) ** (-0.5) * self.K(z, mu)
 
         # density
-        rho = torch.sum(p)
+        rho = torch.mean(p)
         rho.requires_grad_ = True
 
         # gradient
         grad = torch.autograd.grad(outputs=rho, inputs=z)[0]
+
         # grad = torch.clamp(grad, min=-0.1, max=0.1)
 
         if torch.any(torch.isnan(grad)):

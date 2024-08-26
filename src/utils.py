@@ -5,78 +5,51 @@ import os
 import numpy as np
 from collections import deque, namedtuple
 import rospy
-
-name2arr = {
-    'joints_pos': 'arr_0',
-    'joints_vel': 'arr_1',
-    'ee_pos': 'arr_2',
-    'ee_or': 'arr_3',
-    'command_vel': 'arr_4',
-    'obj_poses': 'arr_5',
-    'vr_act': 'arr_6'
-}
-Data = namedtuple('Dataset', ['states', 'actions', 'next_states'])
-
-
-class TrajectoryHandler:
-    def __init__(self, save_dir):
-        self.reset()
-        self.save_dir = save_dir
-        os.makedirs(self.save_dir, exist_ok=True)
-
-    def reset(self):
-        self.data_joints_pos = []
-        self.data_joints_vel = []
-        self.data_pos = []
-        self.data_or = []
-        self.data_joint_act = []
-        self.data_vr_act = []
-        self.data_external_objs = []
-
-    def size(self):
-        return len(self.data_joints_pos)
-
-    def store_data(self, data):
-        self.data_joints_pos.append(data[0])
-        self.data_joints_vel.append(data[1])
-        self.data_pos.append(data[2])
-        self.data_or.append(data[3])
-        self.data_joint_act.append(data[4])
-        if data[5] is not None:
-            self.data_vr_act.append(data[5])
-        self.data_external_objs.append(data[6])
-
-    def show_current_status(self):
-        rospy.loginfo(f'------------- SUMMARY -------------')
-        rospy.loginfo(f'joint positions: {len(self.data_joints_pos)}')
-        rospy.loginfo(f'joint velocities: {len(self.data_joints_vel)}')
-        rospy.loginfo(f'ee positions: {len(self.data_pos)}')
-        rospy.loginfo(f'ee orientations: {len(self.data_or)}')
-        rospy.loginfo(f'joint vel actions: {len(self.data_joint_act)}')
-        rospy.loginfo(f'vr commands: {len(self.data_vr_act)}')
-        rospy.loginfo(f'------------------------------------')
-
-    def save_trajectory(self, name):
-        if self.size() > 10:
-            name = f"traj_{name}.npz"
-            file = os.path.join(self.save_dir, name)
-            np.savez(file,
-                     joints_pos=np.concatenate(self.data_joints_pos, 0),
-                     joints_vel=np.concatenate(self.data_joints_vel, 0),
-                     ee_pos=np.concatenate(self.data_pos, 0),
-                     ee_or=np.concatenate(self.data_or, 0),
-                     command_vel=np.concatenate(self.data_joint_act, 0),
-                     obj_poses=self.data_external_objs,
-                     vr_act=np.concatenate(self.data_vr_act, 0) if len(self.data_vr_act) > 0 else np.zeros(1),
-                     )
-            print(f"Trajectory saved at {file}")
-            self.show_current_status()
-            return file
-        else:
-            return 'NEVER'
-
-
 import pickle
+from canopies_simulator.srv import Simulator
+
+
+def check_workspace(pos:np.ndarray, c:np.ndarray, h:float, r_bounds:tuple, theta_bounds:tuple, idx:str=None):
+    p = pos - c
+    dist_xy = np.linalg.norm(p[:2])
+    dist_z = np.linalg.norm(p[2])
+    dist_th = np.arctan2(p[1], p[0])
+    return (dist_xy <= r_bounds[1] and
+            dist_xy >= r_bounds[0] and
+            dist_z <= h and
+            dist_th >= theta_bounds[0] and
+            dist_th <= theta_bounds[1])
+
+def simulator_remove_grape_bunch(id_: int):
+    """
+    Removes the bunch corresponding to the input id
+    """
+    rospy.wait_for_service('/simulator')
+    cmd = rospy.ServiceProxy('/simulator', Simulator)
+    cmd("RemoveGrapeBunch", id_, False, "")
+
+def get_closest_obj(p:np.ndarray, poses:np.ndarray, ids:list):
+    '''
+    INPUT:
+        - p: RF position
+        - poses: array of all object positions
+        - ids: list of object ids
+    OUTPUT: id and distance of the closest object
+    '''
+    dists_3d = poses - np.array(p)
+    dists = np.linalg.norm(dists_3d, axis=-1)
+    idx = np.argmin(dists)
+    return ids[idx], dists_3d[idx]
+
+
+def communicate_instructions(target_id,target_dist):
+    dx, dy, dz = target_dist
+    rospy.loginfo(f'\n{target_id}: {target_dist} ({np.linalg.norm(target_dist)}):')
+    rospy.loginfo(f' - X: {"Forward" if dx >0.0 else "Backward"} by {abs(dx)}')
+    rospy.loginfo(f' - Y: {"Left" if dx >0. else "Right"} by {abs(dy)}')
+    rospy.loginfo(f' - Z: {"Up" if dx >0. else "Down"} by {abs(dz)}')
+
+
 
 class Buffer:
     def __init__(self, save_dir):
@@ -105,6 +78,7 @@ class Buffer:
             cartesian_orientations=self.cartesian_orientations,
             target_positions=self.target_positions,
             target_orientations=self.target_orientations,
+            command_positions=self.command_positions,
             grapes_positions=self.grapes_positions
         )
         file = os.path.join(self.save_dir, name)
@@ -119,4 +93,5 @@ class Buffer:
         rospy.loginfo(f'joint velocities: {len(self.joint_velocities["value"])}')
         rospy.loginfo(f'ee positions: {len(self.cartesian_positions["value"])}')
         rospy.loginfo(f'ee orientations: {len(self.cartesian_orientations["value"])}')
+        rospy.loginfo(f'vr dpositions: {len(self.command_positions["value"])}')
         rospy.loginfo(f'------------------------------------')

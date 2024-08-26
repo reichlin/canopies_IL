@@ -17,22 +17,26 @@ import datetime
 import copy
 import rospkg
 import tf
-from canopies_simulator.srv import Simulator
+from tf.transformations import euler_from_quaternion, quaternion_inverse, quaternion_multiply, quaternion_from_euler
+
 # import the utils libraries
 rospack = rospkg.RosPack()
 package_path = rospack.get_path('imitation_learning')
 module_path = os.path.join(package_path, '/src/utils')
 sys.path.append(module_path)
-from utils import TrajectoryHandler, Buffer
+from utils import Buffer, simulator_remove_grape_bunch, communicate_instructions, get_closest_obj, check_workspace
 from geometry_msgs.msg import Twist
 
 
 class VRCommands:
     def __init__(self):
-
        
         # status variables
         self.recording, self.discard, self.save, self.block, self.resetting = False, False, False, False, False
+
+        self.clip_rotations = True
+        self.random_start = True
+        self.torso_height = rospy.get_param('torso_height')
 
         # remote commands
         self.block_command = rospy.get_param('/vr_commands/block')
@@ -46,17 +50,17 @@ class VRCommands:
         self.names_left = rospy.get_param('/arm_left_joints')
         self.k_v = rospy.get_param('/gains/k_v')
         self.k_p = rospy.get_param('/gains/k_p')
+        self.k_r = rospy.get_param('/gains/k_r')
         rospy.sleep(2)
 
         # init variables
-        self.init_pos = np.array(rospy.get_param('ee_init_pos'))
-        self.init_rot = np.array(rospy.get_param('ee_init_or'))
-        self.init_joint_pos = rospy.get_param('arm_right_init_joint')
+        self.init_pose = np.array(rospy.get_param('init_pose'))
         self.vr_pos, self.ee_pos, self.ee_rot, self.d_vr_pos = np.array([0.]*3),np.array([0.]*3),np.array([0.]*3),np.array([0.]*3)
         self.threshold = rospy.get_param('/threshold')
         self.d_vr_rot = np.array([0.]*3)
         self.vr_rot = np.array([0.0, 0.0, 0.0, 1.0])
         self.target_rot = np.array([0.0, 0.0, 0.0, 1.0])
+        self.ee_pos_msg = ExternalReference()
         self.grapes_pos, self.grapes_idx, self.removed_grape = [],[],[]
         self.velocity_msg_right = Float64MultiArray()
         self.velocity_msg_right.data = [0.0] * 8
@@ -64,15 +68,18 @@ class VRCommands:
 
         # ROS stuff
         rospy.init_node("high_level_controller", anonymous=True)
+
         rospy.set_param('canopies_simulator/joint_group_velocity_controller/joints', self.names_right+['torso_lift_joint'])
         rospy.set_param('canopies_simulator/joint_states/rate', 100)
+        self.listener = tf.TransformListener()
+
         self.publisher_mobile_base = rospy.Publisher('/canopies_simulator/moving_base/twist', Twist, queue_size=10)
         self.publisher_controller_right = rospy.Publisher('/external_references_for_right_arm', ExternalReference,queue_size=1)
-        self.publisher_rigth_arm = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command',
+        self.publisher_joint_commands = rospy.Publisher('canopies_simulator/joint_group_velocity_controller/command',
                                                    Float64MultiArray, queue_size=1)
         self.publisher_teleport = rospy.Publisher('/canopies_simulator/moving_base/teleport',
                                                    Pose, queue_size=1)
-        self.listener = tf.TransformListener()
+
         rospy.Subscriber('/q2r_right_hand_pose', PoseStamped, self.callback_vr_position_right_arm, queue_size=1)
         rospy.Subscriber('/q2r_right_hand_inputs', OVR2ROSInputs, self.callback_vr_inputs_right_arm, queue_size=1)
         rospy.Subscriber('/canopies_simulator/joint_states', JointState, self.callback_joint_state)
@@ -93,32 +100,33 @@ class VRCommands:
         self.traj_buffer = Buffer(save_dir)
         rospy.loginfo('VRCommands initialized')
 
-        self.clip_rotations = True
-        self.random_start = True
-
-
 
     def main(self):
 
         if self.random_start:
-            self.random_init()
-            self.reset()
+            target_id = self.random_init()
+            self.send_viapoint(self.init_pose[:3], self.init_pose[3:])
             rospy.sleep(5)
         else:
-            self.reset()
+            target_id, _ = get_closest_obj(np.array([0.,0.,0.]), self.grapes_pos, self.grapes_idx)
+            self.send_viapoint(self.init_pose[:3], self.init_pose[3:])
 
-        self.torso_controller(0.085)
-        rospy.sleep(5)
 
-        ## ---------------- SIM LOOP ----------------
+        #adjust the torso height
+        goal_pos, _ = self.get_transform(target_frame='base_footprint', source_frame=f'Bunch_{target_id}')
+        head, _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
+        self.head_height_controller(goal_pos[-1] - self.torso_height)
+        rospy.sleep(1)
+
         rospy.loginfo(f'ROS workspace is ready for task {self.task}. Press the lateral button to start!')
 
         while not self.recording:
             rospy.sleep(0.1)
 
-        ee_pos_msg = ExternalReference()
-        offset = self.init_pos - copy.deepcopy(self.vr_pos)
-        offset_rot = tf.transformations.quaternion_inverse(copy.deepcopy(self.vr_rot))
+        ## ====================================== SIM LOOP ========================================================
+        target_pos, target_rot = self.init_pose[:3], self.init_pose[3:]
+        offset = self.init_pose[:3] - copy.deepcopy(self.vr_pos)
+        offset_rot = quaternion_inverse(copy.deepcopy(self.vr_rot))
 
         self.sim_step=0
         while not rospy.is_shutdown():
@@ -126,20 +134,19 @@ class VRCommands:
             #checks
             target_id, target_dist = self.grape_remove_check(self.ee_pos)
 
-            if self.sim_step%50==0:
-                give_instructions(target_id, target_dist)
-
+            if self.sim_step % 50 == 0:
+                communicate_instructions(target_id, target_dist)
 
             if self.resetting:
                 print('resetting...')
-                self.reset()
+                self.send_viapoint(self.init_pose[:3], self.init_pose[3:])
 
             elif self.discard:
                 rospy.loginfo('Trajectory discarded')
                 self.traj_buffer.reset()
 
             elif self.save:
-                if self.traj_buffer.size()>10:
+                if self.traj_buffer.size() > 10:
                     self.traj_buffer.grapes_positions = copy.deepcopy(list(self.grapes_pos))
                     self.traj_buffer.show_current_status()
                     save_path = self.traj_buffer.save_trajectory(f'{str(round(datetime.datetime.now().timestamp()))}.pkl')
@@ -149,46 +156,50 @@ class VRCommands:
 
             elif self.block:
                 self.velocity_msg_right.data = [0.0] * 8
-                self.publisher_rigth_arm.publish(self.velocity_msg_right)
+                self.publisher_joint_commands.publish(self.velocity_msg_right)
 
             else:
 
-                target_pos = offset + self.vr_pos
-                target_or = tf.transformations.quaternion_multiply(self.vr_rot, offset_rot)
+                #compute the target position
+                new_target_pos = offset + self.vr_pos
+                d_target_pos = copy.deepcopy(new_target_pos - target_pos)
+                target_pos = new_target_pos
 
+                # compute the target orientation
+                target_rot = quaternion_multiply(self.vr_rot, offset_rot)
                 if self.clip_rotations:
                     target_euler = np.clip(
-                        tf.transformations.euler_from_quaternion(target_or),
-                        a_min=-np.pi/3,
-                        a_max=np.pi/3
-                    )
-                    target_euler *= 0.8
-                target_or = tf.transformations.quaternion_from_euler(*target_euler)
-
+                        euler_from_quaternion(target_rot), a_min=-np.pi/3, a_max=np.pi/3
+                    )*self.k_r
+                    target_rot = quaternion_from_euler(*target_euler)
                 if self.vr_mirroring:
-                    target_or *= [1., 1., -1., -1.]
+                    target_rot *= [1., 1., -1., -1.]
+
+                # send the commanded pose
+                self.send_viapoint(target_pos, target_rot)
+                t = rospy.get_time()
 
                 if self.recording:
-                    self.traj_buffer.target_orientations['value'].append(list(target_or))
                     self.traj_buffer.target_positions['value'].append(list(target_pos))
-                    self.traj_buffer.target_positions['time'].append(rospy.get_time())
-                    self.traj_buffer.target_orientations['time'].append(rospy.get_time())
+                    self.traj_buffer.target_orientations['value'].append(list(target_rot))
+                    self.traj_buffer.command_positions['value'].append(list(d_target_pos))
+                    self.traj_buffer.target_positions['time'].append(t)
+                    self.traj_buffer.target_orientations['time'].append(t)
+                    self.traj_buffer.command_positions['time'].append(t)
 
-                ee_pos_msg.position = Point(x=target_pos[0], y=target_pos[1], z=target_pos[2])
-                ee_pos_msg.orientation = Quaternion(x=target_or[0], y=target_or[1], z=target_or[2], w=target_or[3])
-                self.publisher_controller_right.publish(ee_pos_msg)
-
-            self.sim_step+=1
+            self.sim_step += 1
             self.control_loop_rate.sleep()
 
-    ##  -----  CALLBACKS  ------------------------------------------------
+
+
+    ## ====================================== CALLBACKS ==========================================================
 
     def callback_vr_position_right_arm(self, vr_pose):
         t = rospy.get_time()
         mirror = -1. if self.vr_mirroring else 1.
 
         self.vr_pos = np.array(
-            [vr_pose.pose.position.x,
+            [mirror*vr_pose.pose.position.x,
             mirror*vr_pose.pose.position.y,
             vr_pose.pose.position.z]
         )
@@ -198,9 +209,6 @@ class VRCommands:
             vr_pose.pose.orientation.z,
             vr_pose.pose.orientation.w]
         )
-        #if self.vr_mirroring:
-        #self.vr_rot = tf.transformations.quaternion_multiply(self.vr_rot, [0., 0., 1., 0.])
-
 
     def callback_velocity_commands(self, msg_vel):
         if self.block:
@@ -209,7 +217,7 @@ class VRCommands:
             for i, name in enumerate(self.names_right):
                 index_in_msg = self.names_right.index(name)
                 self.velocity_msg_right.data[index_in_msg] = msg_vel.data[i] * self.k_v
-        self.publisher_rigth_arm.publish(self.velocity_msg_right)
+        self.publisher_joint_commands.publish(self.velocity_msg_right)
 
     def callback_grapes(self, grapes_data):
         grapes_pos, grapes_idx = [], []
@@ -267,19 +275,19 @@ class VRCommands:
             self.traj_buffer.cartesian_positions['time'].append(t)
             self.traj_buffer.cartesian_orientations['time'].append(t)
 
-    ## OTHER METHODS
+
+    ## ====================================== OTHER METHODS ==========================================================
     def grape_remove_check(self, ee_pos):
-        dists_3d = self.grapes_pos - np.array(ee_pos)
-        dists = np.linalg.norm(dists_3d, axis=-1)
-        target_id = self.grapes_idx[np.argmin(dists)]
+        target_id, target_dist = get_closest_obj(ee_pos, self.grapes_pos, self.grapes_idx)
+        dists = np.linalg.norm(self.grapes_pos - np.array(ee_pos), axis=-1)
         threshold = (dists < self.threshold)*1.
         for i in np.nonzero(threshold)[0]:
             #if self.grapes_idx[i] not in self.removed_grapes:
             rospy.loginfo(f'\n{self.grapes_idx[i]} grape removed')
-                #self.simulator_remove_grape_bunch(int(self.grapes_idx[i]))
+                #simulator_remove_grape_bunch(int(self.grapes_idx[i]))
                 #self.removed_grapes.append(self.grapes_idx[i])
 
-        return target_id, dists_3d[np.argmin(dists)]
+        return target_id, target_dist
 
     def mobile_base_controller(self, v, u):
         twist = Twist()
@@ -288,12 +296,13 @@ class VRCommands:
         twist.angular.z = u * mirror
         self.publisher_mobile_base.publish(twist)
 
-    def torso_controller(self, h):
+        '''
+        def torso_controller(self, h):
         """
         Moves the torso joint until a specif height (considering head_2_link wrt base_frame as reference)
         """
         x_0, _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
-        e = 1.
+        e, z = 1., 0.
         while abs(e)>0.001:
             self.velocity_msg_right.data = [0.0] * 7 + [0.1 * np.sign(e)]
             rospy.sleep(0.01)
@@ -302,43 +311,29 @@ class VRCommands:
             e = h-z
         self.velocity_msg_right.data = [0.0] * 8
         self.publisher_joint_commands.publish(self.velocity_msg_right)
-        return x
-
+        return z'''
 
     def random_init(self):
         """
-        Initialize the robot in a pseudo-random position
+        Teleport the robot to a randomized location such that there is a reachable grape
         """
+        workspace = rospy.get_param('workspace_cylinder')
+        _, _, z_t = rospy.get_param('mobile_base_init_pos')
+        grape_pos = np.array(rospy.get_param('grape_27_position'))
+        mb_offset = np.array(rospy.get_param('mobile_base_offset'))
 
-        if self.vr_mirroring:
-            x_t, y_t, z_t = random.uniform(-0.3, 0.1), random.uniform(-0.1, 0.5), 0.24 + random.uniform(-0.0, 0.0)
-            th_t = np.pi
-        else:
-            x_t, y_t, z_t = random.uniform(-0.1, 0.6), random.uniform(-0.5, 0.1), 0.24
-            th_t = 0 #np.arctan2(0., x_t)
+        r = random.uniform(*workspace['radius_bounds'])
+        theta = random.uniform(*(np.array(workspace['theta_bounds'])+np.pi))
+        noise = (r*np.cos(theta), r*np.sin(theta), 0.)
+        target_pos = grape_pos + mb_offset - workspace['centre'] + noise
+        target_pos[2] = z_t
 
-
-        (x_g, y_g, z_g) = (0.8866932392120361, -1.568265438079834, 1.7083934545516968)
-        #(8.601644515991211, -1.2150168418884277, 1.6853939294815063)
-        #(x_g, y_g, z_g), _ = self.get_transform(target_frame='map', source_frame=f'Bunch_27')
         pose = Pose()
-        pose.position = Point(x_g - x_t, y_g - y_t, z_t)
-        pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(0., 0., th_t))
+        pose.position = Point(*target_pos)
+        pose.orientation = Quaternion(*quaternion_from_euler(0., 0., 0.))
         self.publisher_teleport.publish(pose)
-
-        print(f'Teleported to {(x_t, y_t, z_t)}')
-
-    def reset(self):
-        ee_pos_msg = ExternalReference()
-        ee_pos_msg.position = Point(x=self.init_pos[0], y=self.init_pos[1], z=self.init_pos[2])
-        ee_pos_msg.orientation = Quaternion(x=self.init_rot[0], y=self.init_rot[1], z=self.init_rot[2],
-                                            w=self.init_rot[3])
-        self.publisher_controller_right.publish(ee_pos_msg)
-
-    def simulator_remove_grape_bunch(self, id_: int):
-        rospy.wait_for_service('/simulator')
-        cmd = rospy.ServiceProxy('/simulator', Simulator)
-        cmd("RemoveGrapeBunch", id_, False, "")
+        rospy.loginfo(f'Teleported to {target_pos}')
+        return 27
 
     def get_transform(self, target_frame, source_frame):
         try:
@@ -350,12 +345,28 @@ class VRCommands:
             rospy.logerr(f"Failed to get transform from {source_frame} to {target_frame}: {e}")
             return None, None
 
-def give_instructions(target_id,target_dist):
-    dx, dy, dz = target_dist
-    rospy.loginfo(f'\n{target_id}: {target_dist} ({np.linalg.norm(target_dist)}):')
-    rospy.loginfo(f' - X: {"Forward" if dx >0.0 else "Backward"} by {abs(dx)}')
-    rospy.loginfo(f' - Y: {"Left" if dx >0. else "Right"} by {abs(dy)}')
-    rospy.loginfo(f' - Z: {"Up" if dx >0. else "Down"} by {abs(dz)}')
+    def head_height_controller(self, h):
+        """
+        Reach the head height wrt base_footprint lifting the torso lift joint
+        """
+        e, z = 1., 0.
+        while abs(e)>0.001:
+            self.velocity_msg_right.data = [0.0] * 7 + [0.1 * np.sign(e)]
+            rospy.sleep(0.01)
+            (_, _, z), _ = self.get_transform(target_frame='base_footprint', source_frame='head_2_link')
+            e = h - z
+
+        self.velocity_msg_right.data = [0.0] * 8
+        self.publisher_joint_commands.publish(self.velocity_msg_right)
+        return z
+
+    def send_viapoint(self, position, orientation):
+        """
+        INPUT: viapoint postion (3D) and orientation (quaternion)
+        """
+        self.ee_pos_msg.position = Point(x=position[0], y=position[1], z=position[2])
+        self.ee_pos_msg.orientation = Quaternion(x=orientation[0],y=orientation[1],z=orientation[2],w=orientation[3])
+        self.publisher_controller_right.publish(self.ee_pos_msg)
 
 
 if __name__ == "__main__":

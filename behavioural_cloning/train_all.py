@@ -18,7 +18,7 @@ import torch.optim as optim
 def train(agent, loader_IL, loader_EQUI):
     pbar = tqdm(total=config.epochs)
     best_scores = dict(policy=np.inf, mdn=np.inf, encoder=np.inf)
-    optimizer = optim.Adam(agent.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    optimizer = optim.Adam(agent.parameters(), lr=config.lr) #, weight_decay=config.weight_decay)
 
     for epoch in range(config.epochs):
         agent.train()
@@ -48,14 +48,13 @@ def train(agent, loader_IL, loader_EQUI):
                 s1.to(agent.device)
             ))
 
-            loss = loss_policy - loss_equi + loss_nll
+            loss = loss_policy + loss_equi + loss_nll
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss
-            total_loss += loss_policy #+ loss_equi + loss_nll
+            total_loss += loss.item()
             tot_loss_policy += loss_policy
             tot_loss_equi += loss_equi
             tot_loss_nll += loss_nll
@@ -74,9 +73,9 @@ def train(agent, loader_IL, loader_EQUI):
         #save best params
         if (epoch + 1) % 10 == 0:
 
-            if log_dict['loss_policy'] < best_scores['policy']:
-                best_scores['policy'] = log_dict['total_loss']
-                agent.policy.save_model(os.path.join(config.save_dir, f'model_policy.pth'))
+            #if log_dict['loss_policy'] < best_scores['policy']:
+            '''best_scores['policy'] = log_dict['total_loss']
+            agent.policy.save_model(os.path.join(config.save_dir, f'model_policy.pth'))
 
             if log_dict['loss_equi'] < best_scores['encoder']:
                 best_scores['encoder'] = log_dict['loss_equi']
@@ -84,7 +83,7 @@ def train(agent, loader_IL, loader_EQUI):
 
             if log_dict['loss_nll'] < best_scores['mdn']:
                 best_scores['mdn'] = log_dict['loss_nll']
-                agent.MDN.save_model(os.path.join(config.save_dir, f'model_mdn.pth'))
+                agent.MDN.save_model(os.path.join(config.save_dir, f'model_mdn.pth'))'''
 
             agent.eval()
             acts = agent.policy(
@@ -105,6 +104,20 @@ def train(agent, loader_IL, loader_EQUI):
             plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_positions.png'))
             plt.close()
 
+            cur_pos = np.zeros(3)
+            cur_pos_ = np.zeros(3)
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+
+            for a, a_ in zip(actions[:353], acts[:353]):
+                cur_pos += a.numpy()[:3]
+                cur_pos_ += a_[:3]
+                ax.scatter(*cur_pos, color='red', s=1)
+                ax.scatter(*cur_pos_, color='blue', s=0.1)
+
+            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_single_traj.png'))
+            plt.close()
+
             fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
             ax0.scatter(acts[:, 3], acts[:, 4], s=0.1, zorder=2, color='blue')
             ax1.scatter(acts[:, 3], acts[:, 5], s=0.1, zorder=2, color='blue')
@@ -117,21 +130,6 @@ def train(agent, loader_IL, loader_EQUI):
             plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_orientations.png'))
             plt.close()
 
-            s = states[:1586].to(agent.device)
-            g = goals[:1586].to(agent.device)
-            z_ee, _, rho = agent(s,g)
-            z_ee = z_ee.detach().cpu().numpy()
-            rho = rho.detach().cpu()
-            fig = plt.figure()
-            ax = fig.add_subplot(projection='3d')
-            ax.scatter(z_ee[:, 0], z_ee[:, 1], z_ee[:, 2], s=10, color='red', zorder=1)
-            for i in range(rho.shape[1]):
-                rho_i = rho[-1, i, :]
-                distribution = MultivariateNormal(rho_i, torch.eye(3) * 0.001)
-                samples = distribution.rsample((1000,))
-                ax.scatter(samples[:, 0], samples[:, 1], samples[:, 2], s=10, color='blue', alpha=0.01, zorder=2)
-            plt.savefig(os.path.join(os.getcwd(), 'save/figures', f'{tag}_equi_distribution.png'))
-
         pbar.update()
 
     pbar.close()
@@ -142,7 +140,7 @@ def main():
 
     agent = Model(
         input_size=config.input_size,
-        goal_size=config.goal_size,
+        goal_size=2, #config.goal_size,
         action_size=(3, 4),
         N_gaussians=config.N_gaussians,
         device=config.device
@@ -170,7 +168,7 @@ if __name__ == "__main__":
         if not hasattr(config, item) or (hasattr(config, item) and getattr(config, item) is None):
             setattr(config, item, hyperparams[item])
 
-    config.task = 'grasp_best'
+    config.task = 'grasp_last'
 
 
     for name, value in sorted(vars(config).items()):
@@ -181,31 +179,25 @@ if __name__ == "__main__":
     '''config.wb_mode = "online" #'offline' #'online'
     config.wb_group = "02/08" '''
     J_only = True
-    tag = f'J_only_50hz_{config.task}' if J_only else f'J_J_dot_50hz_{config.task}'
+    testing_frequency = 10
+    tag = f'J_only_{testing_frequency}hz_{config.task}' if J_only else f'J_J_dot_{testing_frequency}hz_{config.task}'
     config.save_dir = os.path.join(os.getcwd(), config.save_dir, f'grasping_{tag}')
     os.makedirs(config.save_dir, exist_ok=True)
-
 
     ## LOAD DATASET
     parent_dir = os.path.abspath(os.path.join(os.getcwd(), os.pardir))
 
-    # get the dataset for the equivariant representation
-    states, goals, actions, next_states, positions = load_data_representation(
-        data_path=os.path.join(parent_dir, f'data/{config.task}'),
-        j_only=J_only,
-        single_traj=False,
-        frequency=1
-    )
-    data_EQUI = (states, goals, actions, next_states)
-
-    #get the dataset for imitation learning
-    states, goals, actions, next_states, positions = load_data(
+    #get the dataset for imitation learning and equivariant representation
+    states, goals, actions, next_states, _ = load_data(
         data_path=os.path.join(parent_dir, f'data/{config.task}'),
         j_only=J_only,
         convolving=True,
-        single_traj=False
+        single_traj=False,
+        frequency=testing_frequency
     )
+    goals = goals[:,:2]
     data_IL = (states, goals, actions, next_states)
+    data_EQUI = (states, goals, actions[:,:3], next_states)
 
     print(f'Dataset of {states.shape[0] } samples')
 
