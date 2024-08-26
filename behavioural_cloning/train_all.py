@@ -73,8 +73,7 @@ def train(agent, loader_IL, loader_EQUI):
         #save best params
         if (epoch + 1) % 10 == 0:
 
-            #if log_dict['loss_policy'] < best_scores['policy']:
-            '''best_scores['policy'] = log_dict['total_loss']
+            best_scores['policy'] = log_dict['total_loss']
             agent.policy.save_model(os.path.join(config.save_dir, f'model_policy.pth'))
 
             if log_dict['loss_equi'] < best_scores['encoder']:
@@ -83,7 +82,7 @@ def train(agent, loader_IL, loader_EQUI):
 
             if log_dict['loss_nll'] < best_scores['mdn']:
                 best_scores['mdn'] = log_dict['loss_nll']
-                agent.MDN.save_model(os.path.join(config.save_dir, f'model_mdn.pth'))'''
+                agent.MDN.save_model(os.path.join(config.save_dir, f'model_mdn.pth'))
 
             agent.eval()
             acts = agent.policy(
