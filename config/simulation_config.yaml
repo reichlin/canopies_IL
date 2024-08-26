@@ -3,16 +3,25 @@ arm_left_joints: ["arm_left_1_joint", "arm_left_2_joint", "arm_left_3_joint", "a
 ee_init_pos: [0.0, 0.0, 0.0]
 ee_init_or: [0.0, 0.0, 0.0, 1.0]
 arm_right_init_joint: [-0.780468,  1.467391,  1.142556,  1.570801, -0.121956,  1.398000, 0.0]
+stable: 1
 
 gains:
   k_v: 10.0 #20.0
   k_p: 2.0
 
 rates:
+<<<<<<< HEAD
   recording: 5 #50
   testing: 1
 
 threshold: 0.1
+=======
+  recording: 50
+  testing: 50
+
+threshold: 0.2
+torso_height: 0.1
+>>>>>>> 5ccca436e19423c6c1d79981e31fe33f8b4ff579
 
 vr_commands:
   save: "A"
@@ -24,11 +33,12 @@ vr_commands:
 folders:
   data: data
   load: behavioural_cloning/params
+  result: results
 
 
 agent_hp:
-  n_frames: 4
-  input_dim: 56 #59
+  n_frames: 1
+  input_dim: 14 #56 #59
   hidden_dim: 128
   output_dim: 3
 

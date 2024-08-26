@@ -15,6 +15,7 @@
     <include file="$(find canopies_low_level_controller)/launch/controller.launch"/>
 
     <!-- Running VR commands and low-level commands-->
+    <node pkg="imitation_learning" type="frame_listener.py" name="frame_listener" output="screen"/>
     <node pkg="imitation_learning" type="vr_commands_new.py" name="vr_commands_node" output="screen"/>
 
     <!-- Launching the ROS TCP endpoint -->
@@ -25,5 +26,6 @@
 
     <!-- Running ros2quest -->
     <node pkg="quest2ros" type="ros2quest.py" name="ros2quest_node" output="screen"/>
+
 
 </launch>

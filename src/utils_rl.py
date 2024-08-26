@@ -16,6 +16,8 @@ class MLP(nn.Module):
                                nn.ReLU(),
                                nn.Linear(hidden, hidden),
                                nn.ReLU(),
+                               nn.Linear(hidden, hidden),
+                               nn.ReLU(),
                                nn.Linear(hidden, output_size))
 
     def forward(self, x, g=None):
@@ -27,7 +29,7 @@ class MLP(nn.Module):
 
 class Agent(nn.Module):
 
-    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable= True,  device=None):
+    def __init__(self, input_size, goal_size, action_size, N_gaussians, stable=True,  device=None):
         super(Agent, self).__init__()
         self.stable = stable
         self.N_gaussians = N_gaussians
@@ -42,10 +44,10 @@ class Agent(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr=0.001)
         self.device = device
 
-    def select_action(self, s, g,):
+    def select_action(self, s, g):
 
         z = self.encoder(s)
-        mu = self.MDN(g).view(25, 3)
+        mu = self.MDN(g).reshape(25, 3)
         rho, grad = self.density_estimator.get_gradient(z, mu)
         a_IL = self.policy(s, g)
         p = torch.tanh(rho * 0.002)
@@ -59,6 +61,7 @@ class Agent(nn.Module):
         torch.save(self.state_dict(), path)
 
     def load_model(self, path):
+        print("Loading model from {path}".format(path=path))
         self.load_state_dict(torch.load(path))
 
 

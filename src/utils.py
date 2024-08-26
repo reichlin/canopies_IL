@@ -67,102 +67,56 @@ class TrajectoryHandler:
                      ee_or=np.concatenate(self.data_or, 0),
                      command_vel=np.concatenate(self.data_joint_act, 0),
                      obj_poses=self.data_external_objs,
-                     vr_act=np.concatenate(self.data_vr_act, 0),
+                     vr_act=np.concatenate(self.data_vr_act, 0) if len(self.data_vr_act) > 0 else np.zeros(1),
                      )
+            print(f"Trajectory saved at {file}")
             self.show_current_status()
             return file
         else:
             return 'NEVER'
 
-def process_obs(obs_dict):
-    joint_pos = torch.from_numpy(np.expand_dims(np.stack(obs_dict['joint_pos'], axis=0).flatten(), 0)).float()
-    joint_vel = torch.from_numpy(np.expand_dims(np.stack(obs_dict['joint_vel'], axis=0).flatten(), 0)).float()
-    obs_tsr = torch.cat([joint_pos, joint_vel], dim=1)
-    return obs_tsr
-
-#
-# def get_closest_obj(obj_poses, ee_pos):
-#     closest_object_pos = obj_poses[np.argmin(np.linalg.norm(obj_poses - ee_pos, axis=1))]
-#     return closest_object_pos
-#
-#
-# def load_trajectories(data_path, n_frames=1, n_freq=1):
-#     # Check if the path exists
-#     if not os.path.exists(data_path):
-#         raise FileNotFoundError(f"Path '{data_path}' does not exist.")
-#
-#     data_files = [f for f in os.listdir(data_path) if f.endswith('.npz')]
-#
-#     if not data_files:
-#         raise FileNotFoundError("No .npz files found in the specified path.")
-#
-#     # Initialize lists to store the trajectories in the form: (s,a,s')
-#     trajectories = []
-#     states, acts, next_states = [], [], []
-#
-#     # Load data from each .npz file
-#     for file_name in data_files:
-#         if file_name == 'traj_imitation.npz':
-#             continue
-#         file_path = os.path.join(data_path, file_name)
-#         dataset = np.load(file_path)
-#
-#         # get the observations(goal, joint_pos, joint_vel) and actions from the dataset
-#         ee_pos = dataset[name2arr['ee_pos']]
-#         obj_poses = dataset[name2arr['obj_poses']]
-#         grape_idx = np.argmin(np.sum(np.abs(ee_pos[-1] - obj_poses[0]), -1))
-#         target_pos = obj_poses[:, grape_idx]
-#         # obj_poses = np.array(np.split(obj_poses, obj_poses.shape[0] / 3))
-#         # target_pos = get_closest_obj(obj_poses, ee_pos[-1]).flatten()
-#         joint_poses = list(dataset[name2arr['joints_pos']])
-#         joint_vels = list(dataset[name2arr['joints_vel']])
-#         actions = list(dataset[name2arr['ee_pos']])
-#         # bring everything from 50Hz to 1Hz (padding if necessary)
-#         n = len(joint_poses)
-#         n_pad = int((n_freq - n % n_freq) % n_freq)
-#         joint_poses.extend([joint_poses[-1]] * n_pad)
-#         joint_vels.extend([joint_vels[-1]] * n_pad)
-#         actions.extend([np.zeros(3)] * n_pad)
-#
-#         # np.pad(actions, (0, n_pad), mode='constant')
-#
-#         joint_poses = [joint_poses[j] for j in range(0, n, n_freq)]
-#         joint_vels = [joint_vels[j] for j in range(0, n, n_freq)]
-#         actions = [sum(actions[j:j + n_freq]) for j in range(0, n + n_pad, n_freq)]
-#
-#         # create the stacks of positions and observations
-#         pos_stack = deque([joint_poses[0]] * n_frames, maxlen=n_frames)
-#         vel_stack = deque([joint_vels[0]] * n_frames, maxlen=n_frames)
-#         pos_0 = np.array(pos_stack).flatten().squeeze()
-#         vel_0 = np.array(vel_stack).flatten().squeeze()
-#         state_0 = np.concatenate([target_pos[0], pos_0, vel_0])
-#
-#         for pos_i, vel_i, act_i in zip(joint_poses, joint_vels, actions):
-#             # update the stacks and get the new observations and action
-#             pos_stack.append(pos_i)
-#             vel_stack.append(vel_i)
-#             pos_1 = np.array(pos_stack).flatten()
-#             vel_1 = np.array(vel_stack).flatten()
-#             state_1 = np.concatenate([target_pos[0], pos_1, vel_1])
-#
-#             states.append(torch.from_numpy(state_0))
-#             acts.append(torch.tensor(act_i))
-#             next_states.append(torch.from_numpy(state_1))
-#
-#             state_0 = state_1
-#     return Data(states, acts, next_states)
 
 
-# def yaml_to_namespace(yaml_file):
-#     with open(yaml_file, 'r') as file:
-#         config = yaml.safe_load(file)
-#         return convert_to_namespace(config)
-#
-#
-# def convert_to_namespace(d):
-#     if isinstance(d, dict):
-#         return SimpleNamespace(**{k: convert_to_namespace(v) for k, v in d.items()})
-#     elif isinstance(d, list):
-#         return [convert_to_namespace(i) for i in d]
-#     else:
-#         return d
+
+import pickle
+
+class Buffer:
+    def __init__(self, save_dir):
+        self.reset()
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)
+
+    def reset(self):
+        self.joint_positions = dict(value=[], time=[])
+        self.joint_velocities = dict(value=[], time=[])
+        self.cartesian_positions = dict(value=[], time=[])
+        self.cartesian_orientations = dict(value=[], time=[])
+        self.vr_commands = dict(value=[], time=[])
+        self.grapes_positions = []
+
+    def size(self):
+        return len(self.cartesian_positions['value'])
+
+    def save_trajectory(self, name):
+        d = dict(
+            joint_positions=self.joint_positions,
+            joint_velocities=self.joint_velocities,
+            cartesian_positions=self.cartesian_positions,
+            cartesian_orientations=self.cartesian_orientations,
+            vr_commands=self.vr_commands,
+            grapes_positions=self.grapes_positions
+        )
+        file = os.path.join(self.save_dir, name)
+
+        with open(file, 'wb') as f:
+            pickle.dump(d, f)
+        return file
+
+    def show_current_status(self):
+        rospy.loginfo(f'------------- SUMMARY -------------')
+        rospy.loginfo(f'joint positions: {len(self.joint_positions["value"])}')
+        rospy.loginfo(f'joint velocities: {len(self.joint_velocities["value"])}')
+        rospy.loginfo(f'ee positions: {len(self.cartesian_positions["value"])}')
+        rospy.loginfo(f'ee orientations: {len(self.cartesian_orientations["value"])}')
+        rospy.loginfo(f'vr commands: {len(self.vr_commands["value"])}')
+        rospy.loginfo(f'------------------------------------')

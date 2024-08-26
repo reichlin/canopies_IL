@@ -6,6 +6,31 @@ import os
 from utils_rl import Agent
 import torch
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 data2label = {
     'traj_imitation.npz': ('IL trajectory','blue'), 
     #'traj_imitation_stable.npz': 'IL traj stable', #0.001
@@ -15,16 +40,21 @@ data2label = {
 
 def plot_trajectories(data_dir):
 
-    agent = Agent(input_size=56, hidden_size1=128, hidden_size2=128, output_size=3, stable=True, device='cuda' if torch.cuda.is_available() else 'cpu')
-    encoder_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/model_encode.pth'
-    policy_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/policy_grasp_stable.pth'
-    mdn_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/mdn_grasp_stable.pth'
-    agent.load_model(policy_file, mdn_file)
-    agent.encoder.load_model(encoder_file)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    agent = Agent(56, 3, 3, 25, stable=True,  device=device).to(device)
+    model_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/model_grasp_new.pth'
+    agent.load_model(model_file)
+
+    # agent = Agent(input_size=56, hidden_size1=128, hidden_size2=128, output_size=3, stable=True, device='cuda' if torch.cuda.is_available() else 'cpu')
+    # encoder_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/model_encode.pth'
+    # policy_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/policy_grasp_stable.pth'
+    # mdn_file = '/home/alfredo/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning/params/mdn_grasp_stable.pth'
+    # agent.load_model(policy_file, mdn_file)
+    # agent.encoder.load_model(encoder_file)
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    folder_path = os.path.join(data_dir, 'grasp')
+    folder_path = os.path.join(data_dir, 'grasp_new')
     labelling = True
     # Iterate over all files in the folder
     reached_grapes = []
@@ -32,8 +62,8 @@ def plot_trajectories(data_dir):
         if file_name.endswith('.npz') and not file_name == 'traj_imitation.npz':
             file_path = os.path.join(folder_path, file_name)
             data = np.load(file_path)
-            points = data['arr_2']
-            grapes = data['arr_5']
+            points = data['ee_pos']
+            grapes = data['obj_poses']
             grape_idx = np.argmin(np.sum(np.abs(points[-1]-grapes[0]), -1))
             grape = grapes[0,grape_idx]
             #ax.scatter(points[:, 0], points[:, 1], points[:, 2], label=file_name)
@@ -120,7 +150,7 @@ def plot_trajectories(data_dir):
     p_min, p_max = np.min(grid_points_prob), np.max(grid_points_prob)
 
     for p,point,i in zip(grid_points_prob, grid_points, range(n)):
-        if i%1 ==0:
+        if i%1 == 0:
             p_new = rescale(p.item(),p_min, p_max)
             ax.scatter(point[0], point[1], point[2], alpha=p_new, color=cmap(p_new), s=100)#, label='probability distribution' if i<1 else '')
     plt.xlabel('X axis')
