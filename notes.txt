@@ -1,0 +1,8 @@
+Syncronize from local to cluster:
+rsync -avz -e 'ssh -p 2222 -i ~/.ssh/rplcluster_rsa' /home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning adrianop@moria.csc.kth.se:/Midgard/home/adrianop/code/imitation_learning
+
+Syncronize from cluster to local (images):
+rsync -avz -e 'ssh -p 2222 -i ~/.ssh/rplcluster_rsa' adrianop@moria.csc.kth.se:/Midgard/home/adrianop/code/imitation_learning/behavioural_cloning/save/figures /home/adriano/Desktop/figures_IL
+
+Syncronize from cluster to local (params):
+rsync -avz -e 'ssh -p 2222 -i ~/.ssh/rplcluster_rsa' adrianop@moria.csc.kth.se:/Midgard/home/adrianop/code/imitation_learning/behavioural_cloning/params /home/adriano/Desktop/canopies/code/CanopiesSimulatorROS/workspace/src/imitation_learning/behavioural_cloning
